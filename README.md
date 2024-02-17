@@ -26,21 +26,9 @@ To set up and run the distributed key-value store system, follow these steps:
 
 TODO
 
-## Contributing
-
-Contributions to the project are welcome! If you'd like to contribute, please follow these guidelines:
-
-Fork the repository and create a new branch for your feature or bug fix.
-Make your changes and ensure they are well-documented and tested.
-Submit a pull request detailing your changes and explaining the rationale behind them.
-
 ## License
 
 GNU ?
-
-## Acknowledgments
-
-We would like to thank the open-source community for their valuable contributions and support in developing this project.
 
 ## Contact
 
