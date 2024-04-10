@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 pretty_assertions = "1.4.0"
 thiserror = "1.0.58"
+rand = "0.9.0-alpha.1"

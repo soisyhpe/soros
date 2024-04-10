@@ -2,20 +2,79 @@ use std::{
     io::{self, BufReader, BufWriter, Read, Write},
     net::{TcpListener, TcpStream},
 };
+use std::collections::HashMap;
+use thiserror::Error;
+use soros::rw_queue::RwQueue;
+use crate::Client;
 
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum ServerError {
+    #[error("Key '{0}' bounds another client!")]
+    KeyBoundsAnotherClient(String),
+}
+
+// Represents an abstract state of a server
 pub struct Server {
-    host: String,
-    port: i32,
-    messages: Vec<String>,
+    // Server name
+    pub name: String,
+    // Server host
+    pub host: String,
+    // Server port
+    pub port: u32,
 }
 
 impl Server {
-    pub fn new(host: &str, port: i32) -> Self {
+    pub fn new(name: String, host: String, port: u32) -> Self {
         Self {
-            host: host.to_string(),
+            name,
+            host,
             port,
-            messages: Vec::new(),
         }
+    }
+}
+
+/// Represents local state of a client
+pub struct LocalClient {
+    /// Client
+    client: Client,
+    /// Read/Write queue
+    rw_queue: RwQueue,
+}
+
+impl LocalClient {
+    pub fn new(client: Client) -> Self {
+        Self {
+            client,
+            rw_queue: RwQueue::new(),
+        }
+    }
+}
+
+// Represents the state of a server
+pub struct ServerState {
+    // Server
+    server: Server,
+    // Map of stored keys with their clients
+    clients: HashMap<String, LocalClient>,
+}
+
+impl ServerState {
+    pub fn new(host: String, port: u32) -> Self {
+        Self {
+            server: Server::new(String::from("S"), host, port),
+            clients: HashMap::new(),
+        }
+    }
+
+    /// Write a data
+    pub fn write(&self) -> Result<(), ServerError> {
+        Ok(())
+    }
+
+    /// Read a data
+    pub fn read(&self) -> Result<(), ServerError> {
+        Ok(())
     }
 
     pub fn connect(self) -> TcpStream {
@@ -46,13 +105,13 @@ impl Server {
 
         buf_reader.read_to_string(&mut buffer)?;
         println!("Req: {}", buffer);
-        self.messages.push(buffer);
+        // self.messages.push(buffer);
 
         let mut buf_writer = BufWriter::new(stream);
         buf_writer.write_all(b"Answer")?;
 
         println!("Answer sent");
-        println!("messages: {:#?}", self.messages);
+        // println!("messages: {:#?}", self.messages);
 
         Ok(())
     }
@@ -73,7 +132,7 @@ impl Server {
 // }
 
 fn main() {
-    let mut server = Server::new("127.0.0.1", 6969);
+    let mut server = ServerState::new("127.0.0.1", 6969);
     server.listen();
 
     let mut client = server.connect();
