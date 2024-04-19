@@ -31,6 +31,12 @@ pub struct ProtocolClient {
 }
 
 impl ProtocolClient {
+    fn create_stream(&self) -> Result<TcpStream, ProtocolClientError> {
+        let stream =
+            TcpStream::connect(format!("{}:{}", self.hostname, self.port))?;
+        Ok(stream)
+    }
+
     pub fn new(
         proc_id: ProcId,
         hostname: &str,
@@ -42,12 +48,6 @@ impl ProtocolClient {
             hostname: hostname.to_string(),
             port,
         })
-    }
-
-    fn create_stream(&self) -> Result<TcpStream, ProtocolClientError> {
-        let stream =
-            TcpStream::connect(format!("{}:{}", self.hostname, self.port))?;
-        Ok(stream)
     }
 
     pub fn registry_create(
@@ -131,16 +131,6 @@ impl ProtocolClient {
         self.registry_expect_holder(&mut stream)
     }
 
-    pub fn registry_request_write(
-        &mut self,
-        key_id: KeyId,
-    ) -> Result<ProcId, ProtocolClientError> {
-        info!("Registry write: {:?}", key_id);
-        let mut stream = self.create_stream()?;
-        self.registry_create_request(&mut stream, key_id, RequestType::Write)?;
-        self.registry_expect_holder(&mut stream)
-    }
-
     pub fn registry_request_release(
         &mut self,
         key_id: KeyId,
@@ -152,6 +142,16 @@ impl ProtocolClient {
             key_id,
             RequestType::Release,
         )?;
+        self.registry_expect_success(&mut stream)
+    }
+
+    pub fn registry_request_write(
+        &mut self,
+        key_id: KeyId,
+    ) -> Result<(), ProtocolClientError> {
+        info!("Registry write: {:?}", key_id);
+        let mut stream = self.create_stream()?;
+        self.registry_create_request(&mut stream, key_id, RequestType::Write)?;
         self.registry_expect_success(&mut stream)
     }
 }

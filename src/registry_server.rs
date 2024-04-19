@@ -61,7 +61,7 @@ impl RegistryServer {
         &mut self,
         stream: &mut TcpStream,
     ) -> Result<(), RegistryServerError> {
-        info!("handling connection: {:?}", stream);
+        info!("handling connection from {:?}", stream.peer_addr());
         let mut buffer = [0; 256];
         let size = stream.read(&mut buffer)?;
         let message: Message = serde_json::from_slice(&buffer[..size])?;
@@ -103,7 +103,7 @@ impl RegistryServer {
             RequestType::Read => self
                 .access_manager
                 .request_read(proc_id, key_id)
-                .map(|_| RegistryResponse::Success),
+                .map(RegistryResponse::Holder),
             RequestType::Write => self
                 .access_manager
                 .request_write(proc_id, key_id)

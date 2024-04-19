@@ -13,6 +13,8 @@ pub enum AccessManagerError {
     RequestAccess(ProcId, KeyId),
     #[error("Could not release access for proc: {0}, with key: {1}")]
     ReleaseAccess(ProcId, KeyId),
+    #[error("Key currently accessed")]
+    KeyAccessed,
     #[error("Key already exist: {0}")]
     KeyExists(KeyId),
     #[error("Key not found: {0}")]
@@ -82,8 +84,9 @@ impl AccessManager {
     }
 
     pub fn delete(&mut self, key_id: KeyId) -> Result<(), AccessManagerError> {
-        if !self.key_states.contains_key(&key_id) {
-            return Err(AccessManagerError::KeyNotFound(key_id));
+        let key_state = self.get_key_state(key_id)?;
+        if !key_state.readers.is_empty() || key_state.writer.is_some() {
+            return Err(AccessManagerError::KeyAccessed);
         }
 
         self.key_states.remove(&key_id);
@@ -186,7 +189,7 @@ impl AccessManager {
         &mut self,
         proc_id: ProcId,
         key_id: KeyId,
-    ) -> Result<(), AccessManagerError> {
+    ) -> Result<ProcId, AccessManagerError> {
         let key_state = self.get_key_state_mut(key_id)?;
 
         let requesting_writer = key_state
@@ -202,7 +205,15 @@ impl AccessManager {
         }
 
         key_state.register_reader(proc_id);
-        Ok(())
+
+        // Find a processus that knows the key's data
+        // The writer has the priority, because he can modify the data
+        let mut data_user = key_state.creator;
+        if let Some(writer) = key_state.writer {
+            data_user = writer;
+        }
+
+        Ok(data_user)
     }
 
     /// Reqest write access for a process.
@@ -278,6 +289,7 @@ mod tests {
         manager.request_read(1, 0)?;
         manager.request_read(2, 0)?;
         manager.request_read(3, 0)?;
+        assert!(manager.delete(0).is_err());
         assert_eq!(manager.get_key_state(0)?.pending_request, vec![]);
         assert_eq!(manager.get_key_state(0)?.readers, HashSet::from([1, 2, 3]));
         Ok(())
@@ -289,6 +301,7 @@ mod tests {
         assert!(manager.request_write(1, 0).is_err());
         manager.create(0, 0)?;
         manager.request_write(1, 0)?;
+        assert!(manager.delete(0).is_err());
         assert!(manager.request_write(2, 0).is_err());
         assert_eq!(
             manager.get_key_state(0)?.pending_request,
