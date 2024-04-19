@@ -1,14 +1,17 @@
 use crate::{
     access_manager::{AccessManager, AccessManagerError},
-    protocol::{
-        KeyId, Message, ProcId, RegistryMessage, RegistryResponse, RequestType,
-    },
+    protocol::{Message, RegistryMessage, RegistryResponse, RequestType},
     registry_response,
 };
 use log::{error, info};
-use std::{
-    io::{Read, Write},
+use mio::{
     net::{TcpListener, TcpStream},
+    Events, Interest, Poll, Token,
+};
+use std::{
+    collections::HashMap,
+    io::{self, Read, Write},
+    net::ToSocketAddrs,
 };
 use thiserror::Error;
 
@@ -38,36 +41,101 @@ impl RegistryServer {
             "Starting registry server on {}:{}",
             self.hostname, self.port
         );
-        let listener =
-            TcpListener::bind(format!("{}:{}", self.hostname, self.port))?;
+        let addr_string = format!("{}:{}", self.hostname, self.port);
+        let addr = addr_string.to_socket_addrs()?.next().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::AddrNotAvailable,
+                format!("Could not find address {}", addr_string),
+            )
+        })?;
+        let mut listener = TcpListener::bind(addr)?;
 
-        for stream in listener.incoming() {
-            let mut stream = stream?;
-            let res = self.handle_connection(&mut stream);
+        // mio poll, use epoll / kqueue under the hood
+        let mut events = Events::with_capacity(128);
+        let mut poll = Poll::new()?;
+        const LISTENER: Token = Token(0);
+        poll.registry().register(
+            &mut listener,
+            LISTENER,
+            Interest::READABLE,
+        )?;
 
-            if let Err(err) = res {
-                error!("{}", err.to_string());
-                self.handle_response(
-                    &mut stream,
-                    RegistryResponse::Error(err.to_string()),
-                )?;
+        // keep track of clients
+        let mut counter: usize = 0;
+        let mut clients: HashMap<Token, TcpStream> = HashMap::new();
+
+        loop {
+            poll.poll(&mut events, None)?;
+            for event in events.iter() {
+                match event.token() {
+                    LISTENER => {
+                        let (mut stream, _addr) = listener.accept()?;
+
+                        counter += 1;
+                        let token = Token(counter);
+                        poll.registry().register(
+                            &mut stream,
+                            token,
+                            Interest::READABLE,
+                        )?;
+
+                        clients.insert(token, stream);
+                    }
+                    token if event.is_readable() => {
+                        let stream = clients.get_mut(&token).unwrap();
+                        let mut buffer = [0; 256];
+                        let read = stream.read(&mut buffer);
+                        match read {
+                            Ok(0) => {
+                                clients.remove(&token);
+                                break;
+                            }
+                            Ok(size) => {
+                                if let Err(err) =
+                                    self.handle_request(stream, &buffer[..size])
+                                {
+                                    self.handle_error(stream, err)?;
+                                }
+                            }
+                            Err(ref e)
+                                if e.kind() == io::ErrorKind::WouldBlock =>
+                            {
+                                break
+                            }
+                            Err(e) => panic!("Unexpected error: {}", e),
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
-
-        Ok(())
     }
 
-    fn handle_connection(
+    fn handle_error(
+        &mut self,
+        stream: &mut TcpStream,
+        err: RegistryServerError,
+    ) -> Result<(), RegistryServerError> {
+        error!("{}", err.to_string());
+        self.handle_response(stream, RegistryResponse::Error(err.to_string()))
+    }
+
+    fn _handle_connection(
         &mut self,
         stream: &mut TcpStream,
     ) -> Result<(), RegistryServerError> {
         info!("handling connection from {:?}", stream.peer_addr());
-        let mut buffer = [0; 256];
-        let size = stream.read(&mut buffer)?;
-        let message: Message = serde_json::from_slice(&buffer[..size])?;
-        let response = self.handle_message(message)?;
-        self.handle_response(stream, response)?;
         Ok(())
+    }
+
+    fn handle_request(
+        &mut self,
+        stream: &mut TcpStream,
+        data: &[u8],
+    ) -> Result<(), RegistryServerError> {
+        let message: Message = serde_json::from_slice(data)?;
+        let response = self.handle_message(message)?;
+        self.handle_response(stream, response)
     }
 
     fn handle_message(
@@ -80,40 +148,33 @@ impl RegistryServer {
                 request_type,
                 proc_id,
                 key_id,
-            }) => self.handle_request(request_type, proc_id, key_id),
+            }) => {
+                let response = match request_type {
+                    RequestType::Create => self
+                        .access_manager
+                        .create(proc_id, key_id)
+                        .map(|_| RegistryResponse::Success),
+                    RequestType::Delete => self
+                        .access_manager
+                        .delete(key_id)
+                        .map(|_| RegistryResponse::Success),
+                    RequestType::Read => self
+                        .access_manager
+                        .request_read(proc_id, key_id)
+                        .map(RegistryResponse::Holder),
+                    RequestType::Write => self
+                        .access_manager
+                        .request_write(proc_id, key_id)
+                        .map(|_| RegistryResponse::Success),
+                    RequestType::Release => self
+                        .access_manager
+                        .release(proc_id, key_id)
+                        .map(|_| RegistryResponse::Success),
+                };
+                response.map_err(RegistryServerError::AccessManager)
+            }
             _ => Err(RegistryServerError::UnexpectedRequest),
         }
-    }
-
-    fn handle_request(
-        &mut self,
-        request_type: RequestType,
-        proc_id: ProcId,
-        key_id: KeyId,
-    ) -> Result<RegistryResponse, RegistryServerError> {
-        let response = match request_type {
-            RequestType::Create => self
-                .access_manager
-                .create(proc_id, key_id)
-                .map(|_| RegistryResponse::Success),
-            RequestType::Delete => self
-                .access_manager
-                .delete(key_id)
-                .map(|_| RegistryResponse::Success),
-            RequestType::Read => self
-                .access_manager
-                .request_read(proc_id, key_id)
-                .map(RegistryResponse::Holder),
-            RequestType::Write => self
-                .access_manager
-                .request_write(proc_id, key_id)
-                .map(|_| RegistryResponse::Success),
-            RequestType::Release => self
-                .access_manager
-                .release(proc_id, key_id)
-                .map(|_| RegistryResponse::Success),
-        };
-        response.map_err(RegistryServerError::AccessManager)
     }
 
     fn handle_response(
@@ -121,8 +182,8 @@ impl RegistryServer {
         stream: &mut TcpStream,
         response: RegistryResponse,
     ) -> Result<(), RegistryServerError> {
-        stream
-            .write_all(&serde_json::to_vec(&registry_response!(response))?)?;
+        let data = serde_json::to_vec(&registry_response!(response))?;
+        stream.write_all(&data)?;
         Ok(())
     }
 
