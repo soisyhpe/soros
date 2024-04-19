@@ -1,5 +1,5 @@
 use crate::{
-    access_manager::{AccessManager, AccessManagerError},
+    access_manager::{AccessGranted, AccessManager, AccessManagerError},
     protocol::{
         Message, ProcId, RegistryMessage, RegistryResponse, RequestType,
     },
@@ -181,7 +181,9 @@ impl RegistryServer {
         self.handle_response(token, response)?;
 
         // check if we need to grant access to pending request
-        if let Ok(req) = self.access_manager.access_granted_rx.try_recv() {
+        let requests: Vec<AccessGranted> =
+            self.access_manager.access_granted_rx.try_iter().collect();
+        for req in requests {
             info!("Handling pending request: {:?}", req);
             let (proc_id, _key_id, req_type) = req;
             let response = match req_type {
