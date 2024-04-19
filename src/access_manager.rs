@@ -3,12 +3,15 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
     ops::Deref,
+    sync::mpsc::{channel, Receiver, SendError, Sender},
 };
 use thiserror::Error;
 
 #[non_exhaustive]
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AccessManagerError {
+    #[error("Send error: {0}")]
+    SendError(#[from] SendError<AccessGranted>),
     #[error("Could not grant access request for proc: {0}, with key: {1}")]
     RequestAccess(ProcId, KeyId),
     #[error("Could not release access for proc: {0}, with key: {1}")]
@@ -23,6 +26,7 @@ pub enum AccessManagerError {
 
 /// Closure called when access is granted to a process.
 pub type OnAccessGranted = Box<dyn Fn(ProcId, KeyId, RequestType)>;
+pub type AccessGranted = (ProcId, KeyId, RequestType);
 
 /// Current state of a specific key, tracking current readers and writer.
 /// Pending requests are processed alternately to ensure fair access.
@@ -55,7 +59,9 @@ impl KeyState {
 }
 
 pub struct AccessManager {
-    on_access_granted: OnAccessGranted,
+    pub on_access_granted: OnAccessGranted,
+    pub access_granted_rx: Receiver<AccessGranted>,
+    pub access_granted_tx: Sender<AccessGranted>,
     key_states: HashMap<KeyId, KeyState>,
 }
 
@@ -112,11 +118,14 @@ impl AccessManager {
     }
 
     /// Handle pending request queue for a given key
-    fn handle_requesting(&mut self, key_id: KeyId) {
+    fn handle_requesting(
+        &mut self,
+        key_id: KeyId,
+    ) -> Result<(), AccessManagerError> {
         let key_state = self.key_states.get_mut(&key_id).unwrap();
         let Some((proc_id, req_type)) = key_state.pending_request.front()
         else {
-            return;
+            return Ok(());
         };
         match req_type {
             RequestType::Write => {
@@ -125,8 +134,14 @@ impl AccessManager {
                     key_id,
                     RequestType::Write,
                 );
+                self.access_granted_tx.send((
+                    *proc_id,
+                    key_id,
+                    RequestType::Write,
+                ))?;
                 key_state.register_writer(*proc_id);
                 key_state.pending_request.pop_front();
+                Ok(())
             }
             RequestType::Read => {
                 while let Some((proc_id, RequestType::Read)) =
@@ -137,9 +152,15 @@ impl AccessManager {
                         key_id,
                         RequestType::Read,
                     );
+                    self.access_granted_tx.send((
+                        *proc_id,
+                        key_id,
+                        RequestType::Read,
+                    ))?;
                     key_state.register_reader(*proc_id);
                     key_state.pending_request.pop_front();
                 }
+                Ok(())
             }
             _ => {
                 panic!("Unexpected request type")
@@ -148,8 +169,11 @@ impl AccessManager {
     }
 
     pub fn new(on_grant: OnAccessGranted) -> AccessManager {
+        let (access_tx, access_rx) = channel::<AccessGranted>();
         AccessManager {
             on_access_granted: on_grant,
+            access_granted_tx: access_tx,
+            access_granted_rx: access_rx,
             key_states: HashMap::new(),
         }
     }

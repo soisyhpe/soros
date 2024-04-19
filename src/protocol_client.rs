@@ -85,7 +85,9 @@ impl ProtocolClient {
         }
     }
 
-    fn registry_expect_success(&mut self) -> Result<(), ProtocolClientError> {
+    pub fn registry_expect_success(
+        &mut self,
+    ) -> Result<(), ProtocolClientError> {
         match self.registry_handle_response()? {
             RegistryResponse::Success => Ok(()),
             _ => Err(ProtocolClientError::UnexpectedResponse),

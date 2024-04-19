@@ -176,7 +176,21 @@ impl RegistryServer {
     ) -> Result<(), RegistryServerError> {
         let message: Message = serde_json::from_slice(data)?;
         let response = self.handle_message(message)?;
-        self.handle_response(token, response)
+        self.handle_response(token, response)?;
+
+        // check if we need to grant access to pending request
+        if let Ok(req) = self.access_manager.access_granted_rx.try_recv() {
+            info!("Handling pending request: {:?}", req);
+            let (proc_id, _key_id, req_type) = req;
+            let response = match req_type {
+                RequestType::Read => RegistryResponse::Success,
+                RequestType::Write => RegistryResponse::Success,
+                _ => unreachable!(),
+            };
+            self.handle_response(Token(proc_id), response)?;
+        }
+
+        Ok(())
     }
 
     fn handle_response(
