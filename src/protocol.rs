@@ -1,32 +1,54 @@
-/// Represents the type of p2p message
-///
-/// Only two type of messages are allowed: Request and Data
-pub enum MessageType {
-    /// Indicates that you're asking for a resource
-    Request,
-    /// Indicates that you're answering a resource request
-    Data,
+use serde::{Deserialize, Serialize};
+
+/// Unique identifier for a process.
+pub type ProcId = usize;
+/// Unique identifier for a key.
+pub type KeyId = usize;
+
+/// Represents different types of messages exchanged in the protocol.
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Message {
+    /// Represent request / response related to the registry.
+    Registry(RegistryMessage),
+    /// Represent request / response related to peer-to-peer data.
+    Data(DataMessage),
 }
 
-/// Represents the communication between two clients
-pub struct Message {
-    /// Who is sending the message (useful for the answer)
-    sender: u32,
-    /// Type of message
-    message_type: MessageType,
-    /// Requested data
-    data_key: String,
+/// Represents different kind of responses from the registry.
+#[derive(Serialize, Deserialize, Debug)]
+pub enum RegistryResponse {
+    Success,
+    /// Return a process id using the data, can be used for the peer-to-peer protocol.
+    Holder(ProcId),
+    Error(String),
 }
 
-impl Message {
-    pub fn new(sender: u32, message_type: MessageType, data_key: String) -> Message {
-        Message {
-            sender,
-            message_type,
-            data_key,
-        }
-    }
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub enum RequestType {
+    Create,
+    Delete,
+    Read,
+    Write,
 }
 
-#[cfg(test)]
-mod tests {}
+/// Represent a message related to the registry
+#[derive(Serialize, Deserialize, Debug)]
+pub enum RegistryMessage {
+    /// Request for accessing registry data.
+    Request {
+        request_type: RequestType,
+        proc_id: ProcId,
+        key_id: KeyId,
+    },
+    /// Response containing registry data.
+    Response(RegistryResponse),
+}
+
+/// Represent a message related to the peer-to-peer data exchange protocol
+#[derive(Serialize, Deserialize, Debug)]
+pub enum DataMessage {
+    /// Request for peer-to-peer data content.
+    Request { _data: u32 },
+    /// Response containing peer-to-peer data content.
+    Response { _data: u32 },
+}

@@ -1,3 +1,4 @@
+use crate::protocol::{KeyId, ProcId, RequestType};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
@@ -16,17 +17,6 @@ pub enum AccessManagerError {
     KeyExists(KeyId),
     #[error("Key not found: {0}")]
     KeyNotFound(KeyId),
-}
-
-/// Unique identifier for a process.
-type ProcId = usize;
-/// Unique identifier for a key.
-type KeyId = usize;
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum RequestType {
-    Writer,
-    Reader,
 }
 
 /// Closure called when access is granted to a process.
@@ -126,27 +116,30 @@ impl AccessManager {
             return;
         };
         match req_type {
-            RequestType::Writer => {
+            RequestType::Write => {
                 self.on_access_granted.deref()(
                     *proc_id,
                     key_id,
-                    RequestType::Writer,
+                    RequestType::Write,
                 );
                 key_state.register_writer(*proc_id);
                 key_state.pending_request.pop_front();
             }
-            RequestType::Reader => {
-                while let Some((proc_id, RequestType::Reader)) =
+            RequestType::Read => {
+                while let Some((proc_id, RequestType::Read)) =
                     key_state.pending_request.front()
                 {
                     self.on_access_granted.deref()(
                         *proc_id,
                         key_id,
-                        RequestType::Reader,
+                        RequestType::Read,
                     );
                     key_state.register_reader(*proc_id);
                     key_state.pending_request.pop_front();
                 }
+            }
+            _ => {
+                panic!("Unexpected request type")
             }
         }
     }
@@ -199,12 +192,12 @@ impl AccessManager {
         let requesting_writer = key_state
             .pending_request
             .front()
-            .is_some_and(|req| matches!(req.1, RequestType::Writer));
+            .is_some_and(|req| matches!(req.1, RequestType::Write));
 
         if key_state.writer.is_some() || requesting_writer {
             key_state
                 .pending_request
-                .push_back((proc_id, RequestType::Reader));
+                .push_back((proc_id, RequestType::Read));
             return Err(AccessManagerError::RequestAccess(proc_id, key_id));
         }
 
@@ -224,7 +217,7 @@ impl AccessManager {
         if !key_state.readers.is_empty() || key_state.writer.is_some() {
             key_state
                 .pending_request
-                .push_back((proc_id, RequestType::Writer));
+                .push_back((proc_id, RequestType::Write));
             return Err(AccessManagerError::RequestAccess(proc_id, key_id));
         }
 
@@ -299,7 +292,7 @@ mod tests {
         assert!(manager.request_write(2, 0).is_err());
         assert_eq!(
             manager.get_key_state(0)?.pending_request,
-            vec![(2, RequestType::Writer)]
+            vec![(2, RequestType::Write)]
         );
         assert_eq!(manager.get_key_state(0)?.writer, Some(1));
         Ok(())
@@ -315,7 +308,7 @@ mod tests {
         assert!(manager.request_read(4, 0).is_err());
         assert_eq!(
             manager.get_key_state(0)?.pending_request,
-            vec![(3, RequestType::Writer), (4, RequestType::Reader)]
+            vec![(3, RequestType::Write), (4, RequestType::Read)]
         );
         Ok(())
     }
@@ -329,7 +322,7 @@ mod tests {
         assert!(manager.request_write(3, 0).is_err());
         assert_eq!(
             manager.get_key_state(0)?.pending_request,
-            vec![(2, RequestType::Reader), (3, RequestType::Writer)]
+            vec![(2, RequestType::Read), (3, RequestType::Write)]
         );
         Ok(())
     }
@@ -375,11 +368,11 @@ mod tests {
         assert!(manager.request_write(2, 0).is_err());
         assert!(manager.request_read(3, 0).is_err());
 
-        assert_on_grant!(fn_tx, 2, 0, RequestType::Writer);
+        assert_on_grant!(fn_tx, 2, 0, RequestType::Write);
         manager.release(1, 0)?;
         assert_eq!(call_rx.try_iter().count(), 1);
 
-        assert_on_grant!(fn_tx, 3, 0, RequestType::Reader);
+        assert_on_grant!(fn_tx, 3, 0, RequestType::Read);
         manager.release(2, 0)?;
         assert_eq!(call_rx.try_iter().count(), 1);
 
@@ -397,12 +390,12 @@ mod tests {
         assert!(manager.request_write(5, 0).is_err());
 
         for i in 2..=4 {
-            assert_on_grant!(fn_tx, i, 0, RequestType::Reader);
+            assert_on_grant!(fn_tx, i, 0, RequestType::Read);
         }
         manager.release(1, 0)?;
         assert_eq!(call_rx.try_iter().count(), 3);
 
-        assert_on_grant!(fn_tx, 5, 0, RequestType::Writer);
+        assert_on_grant!(fn_tx, 5, 0, RequestType::Write);
         manager.release(2, 0)?;
         manager.release(3, 0)?;
         assert_eq!(call_rx.try_iter().count(), 0);
@@ -425,25 +418,25 @@ mod tests {
         assert!(manager.request_read(b, x).is_err());
         assert_eq!(
             manager.get_key_state(x)?.pending_request,
-            vec![(c, RequestType::Writer), (b, RequestType::Reader)]
+            vec![(c, RequestType::Write), (b, RequestType::Read)]
         );
 
-        assert_on_grant!(fn_tx, c, x, RequestType::Writer);
+        assert_on_grant!(fn_tx, c, x, RequestType::Write);
         manager.release(a, x)?;
         assert_eq!(call_rx.try_iter().count(), 1);
         assert_eq!(
             manager.get_key_state(x)?.pending_request,
-            vec![(b, RequestType::Reader)]
+            vec![(b, RequestType::Read)]
         );
 
         assert!(manager.request_read(d, x).is_err());
         assert_eq!(
             manager.get_key_state(x)?.pending_request,
-            vec![(b, RequestType::Reader), (d, RequestType::Reader)]
+            vec![(b, RequestType::Read), (d, RequestType::Read)]
         );
 
-        assert_on_grant!(fn_tx, b, x, RequestType::Reader);
-        assert_on_grant!(fn_tx, d, x, RequestType::Reader);
+        assert_on_grant!(fn_tx, b, x, RequestType::Read);
+        assert_on_grant!(fn_tx, d, x, RequestType::Read);
         manager.release(c, 0)?;
         assert_eq!(call_rx.try_iter().count(), 2);
 
