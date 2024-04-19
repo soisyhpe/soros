@@ -106,7 +106,11 @@ impl RegistryServer {
                 .map(|_| RegistryResponse::Success),
             RequestType::Write => self
                 .access_manager
-                .request_read(proc_id, key_id)
+                .request_write(proc_id, key_id)
+                .map(|_| RegistryResponse::Success),
+            RequestType::Release => self
+                .access_manager
+                .release(proc_id, key_id)
                 .map(|_| RegistryResponse::Success),
         };
         response.map_err(RegistryServerError::AccessManager)

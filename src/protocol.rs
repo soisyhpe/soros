@@ -29,6 +29,7 @@ pub enum RequestType {
     Delete,
     Read,
     Write,
+    Release,
 }
 
 /// Represent a message related to the registry

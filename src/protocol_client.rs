@@ -54,7 +54,7 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
-        info!("Registry create request: {:?}", key_id);
+        info!("Registry create: {:?}", key_id);
         let mut stream = self.create_stream()?;
         self.registry_create_request(&mut stream, key_id, RequestType::Create)?;
         self.registry_expect_success(&mut stream)
@@ -77,7 +77,7 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
-        info!("Registry delete request: {:?}", key_id);
+        info!("Registry delete: {:?}", key_id);
         let mut stream = self.create_stream()?;
         self.registry_create_request(&mut stream, key_id, RequestType::Delete)?;
         self.registry_expect_success(&mut stream)
@@ -125,7 +125,7 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<ProcId, ProtocolClientError> {
-        info!("Registry read request: {:?}", key_id);
+        info!("Registry read: {:?}", key_id);
         let mut stream = self.create_stream()?;
         self.registry_create_request(&mut stream, key_id, RequestType::Read)?;
         self.registry_expect_holder(&mut stream)
@@ -135,9 +135,23 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<ProcId, ProtocolClientError> {
-        info!("Registry write request: {:?}", key_id);
+        info!("Registry write: {:?}", key_id);
         let mut stream = self.create_stream()?;
         self.registry_create_request(&mut stream, key_id, RequestType::Write)?;
         self.registry_expect_holder(&mut stream)
+    }
+
+    pub fn registry_request_release(
+        &mut self,
+        key_id: KeyId,
+    ) -> Result<(), ProtocolClientError> {
+        info!("Registry release: {:?}", key_id);
+        let mut stream = self.create_stream()?;
+        self.registry_create_request(
+            &mut stream,
+            key_id,
+            RequestType::Release,
+        )?;
+        self.registry_expect_success(&mut stream)
     }
 }
