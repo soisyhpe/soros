@@ -1,5 +1,4 @@
 use env_logger::Env;
-use log::info;
 use soros::protocol_client::{ProtocolClient, ProtocolClientError};
 
 fn main() -> Result<(), ProtocolClientError> {
@@ -7,5 +6,8 @@ fn main() -> Result<(), ProtocolClientError> {
         .init();
     let mut protocol_client = ProtocolClient::new(1, "localhost", 8888)?;
     protocol_client.registry_create(10)?;
+    protocol_client.registry_create(5)?;
+    protocol_client.registry_delete(10)?;
+    protocol_client.registry_delete(5)?;
     Ok(())
 }

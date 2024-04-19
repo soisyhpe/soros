@@ -3,8 +3,11 @@ use std::io::prelude::*;
 use std::net::TcpStream;
 use thiserror::Error;
 
-use crate::protocol::{
-    KeyId, Message, ProcId, RegistryMessage, RegistryResponse, RequestType,
+use crate::{
+    protocol::{
+        KeyId, Message, ProcId, RegistryMessage, RegistryResponse, RequestType,
+    },
+    registry_request,
 };
 
 #[non_exhaustive]
@@ -22,7 +25,6 @@ pub enum ProtocolClientError {
 
 #[derive(Debug)]
 pub struct ProtocolClient {
-    stream: TcpStream,
     pub hostname: String,
     pub port: u32,
     pub proc_id: ProcId,
@@ -39,8 +41,13 @@ impl ProtocolClient {
             proc_id,
             hostname: hostname.to_string(),
             port,
-            stream: TcpStream::connect(format!("{}:{}", hostname, port))?,
         })
+    }
+
+    fn create_stream(&self) -> Result<TcpStream, ProtocolClientError> {
+        let stream =
+            TcpStream::connect(format!("{}:{}", self.hostname, self.port))?;
+        Ok(stream)
     }
 
     pub fn registry_create(
@@ -48,56 +55,60 @@ impl ProtocolClient {
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
         info!("Registry create request: {:?}", key_id);
-        self.stream.write_all(
-            &self.registry_create_request(key_id, RequestType::Create)?,
-        )?;
-        self.registry_expect_success()
+        let mut stream = self.create_stream()?;
+        self.registry_create_request(&mut stream, key_id, RequestType::Create)?;
+        self.registry_expect_success(&mut stream)
     }
 
     fn registry_create_request(
-        &self,
+        &mut self,
+        stream: &mut TcpStream,
         key_id: KeyId,
         request_type: RequestType,
-    ) -> Result<Vec<u8>, ProtocolClientError> {
-        serde_json::to_vec(&Message::Registry(RegistryMessage::Request {
-            proc_id: self.proc_id,
-            key_id,
-            request_type,
-        }))
-        .map_err(ProtocolClientError::from)
+    ) -> Result<(), ProtocolClientError> {
+        let message = registry_request!(self.proc_id, key_id, request_type);
+        let data =
+            serde_json::to_vec(&message).map_err(ProtocolClientError::from)?;
+        stream.write_all(&data)?;
+        Ok(())
     }
 
     pub fn registry_delete(
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
-        self.stream.write_all(
-            &self.registry_create_request(key_id, RequestType::Delete)?,
-        )?;
-        self.registry_expect_success()
+        info!("Registry delete request: {:?}", key_id);
+        let mut stream = self.create_stream()?;
+        self.registry_create_request(&mut stream, key_id, RequestType::Delete)?;
+        self.registry_expect_success(&mut stream)
     }
 
     fn registry_expect_holder(
-        &mut self,
+        &self,
+        stream: &mut TcpStream,
     ) -> Result<ProcId, ProtocolClientError> {
-        match self.registry_handle_response()? {
+        match self.registry_handle_response(stream)? {
             RegistryResponse::Holder(proc_id) => Ok(proc_id),
             _ => Err(ProtocolClientError::UnexpectedResponse),
         }
     }
 
-    fn registry_expect_success(&mut self) -> Result<(), ProtocolClientError> {
-        match self.registry_handle_response()? {
+    fn registry_expect_success(
+        &self,
+        stream: &mut TcpStream,
+    ) -> Result<(), ProtocolClientError> {
+        match self.registry_handle_response(stream)? {
             RegistryResponse::Success => Ok(()),
             _ => Err(ProtocolClientError::UnexpectedResponse),
         }
     }
 
     fn registry_handle_response(
-        &mut self,
+        &self,
+        stream: &mut TcpStream,
     ) -> Result<RegistryResponse, ProtocolClientError> {
         let mut buffer = [0; 256];
-        let size = self.stream.read(&mut buffer)?;
+        let size = stream.read(&mut buffer)?;
         let message = serde_json::from_slice(&buffer[..size])?;
         match message {
             Message::Registry(RegistryMessage::Response(resp)) => match resp {
@@ -114,19 +125,19 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<ProcId, ProtocolClientError> {
-        self.stream.write_all(
-            &self.registry_create_request(key_id, RequestType::Read)?,
-        )?;
-        self.registry_expect_holder()
+        info!("Registry read request: {:?}", key_id);
+        let mut stream = self.create_stream()?;
+        self.registry_create_request(&mut stream, key_id, RequestType::Read)?;
+        self.registry_expect_holder(&mut stream)
     }
 
     pub fn registry_request_write(
         &mut self,
         key_id: KeyId,
     ) -> Result<ProcId, ProtocolClientError> {
-        self.stream.write_all(
-            &self.registry_create_request(key_id, RequestType::Write)?,
-        )?;
-        self.registry_expect_holder()
+        info!("Registry write request: {:?}", key_id);
+        let mut stream = self.create_stream()?;
+        self.registry_create_request(&mut stream, key_id, RequestType::Write)?;
+        self.registry_expect_holder(&mut stream)
     }
 }

@@ -52,3 +52,21 @@ pub enum DataMessage {
     /// Response containing peer-to-peer data content.
     Response { _data: u32 },
 }
+
+#[macro_export]
+macro_rules! registry_request {
+    ($proc_id: expr, $key_id: expr, $request_type: ident) => {
+        Message::Registry(RegistryMessage::Request {
+            proc_id: $proc_id,
+            key_id: $key_id,
+            request_type: $request_type,
+        })
+    };
+}
+
+#[macro_export]
+macro_rules! registry_response {
+    ($resp: expr) => {
+        Message::Registry(RegistryMessage::Response($resp))
+    };
+}
