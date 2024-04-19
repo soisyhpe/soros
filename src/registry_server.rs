@@ -28,6 +28,8 @@ pub enum RegistryServerError {
     UnexpectedRequest,
     #[error("Access manager error: {0}")]
     AccessManager(#[from] AccessManagerError),
+    #[error("Invalid {:?}", .0)]
+    InvalidToken(Token),
 }
 
 #[derive(Debug)]
@@ -198,7 +200,9 @@ impl RegistryServer {
         token: Token,
         response: RegistryResponse,
     ) -> Result<(), RegistryServerError> {
-        let stream = self.token_stream_map.get_mut(&token).unwrap();
+        let Some(stream) = self.token_stream_map.get_mut(&token) else {
+            return Err(RegistryServerError::InvalidToken(token));
+        };
         let data = serde_json::to_vec(&registry_response!(response))?;
         stream.write_all(&data)?;
         Ok(())
@@ -208,7 +212,7 @@ impl RegistryServer {
         Ok(Self {
             hostname: hostname.to_string(),
             port,
-            access_manager: AccessManager::new(Box::new(|_, _, _| {})),
+            access_manager: AccessManager::new(),
             token_stream_map: HashMap::new(),
             id_counter: 0,
             poll: Poll::new()?,
