@@ -1,6 +1,8 @@
 use crate::{
     access_manager::{AccessManager, AccessManagerError},
-    protocol::{Message, RegistryMessage, RegistryResponse, RequestType},
+    protocol::{
+        Message, ProcId, RegistryMessage, RegistryResponse, RequestType,
+    },
     registry_response,
 };
 use log::{error, info};
@@ -33,6 +35,9 @@ pub struct RegistryServer {
     pub hostname: String,
     pub port: u32,
     access_manager: AccessManager,
+    poll: Poll,
+    token_stream_map: HashMap<Token, TcpStream>,
+    id_counter: ProcId,
 }
 
 impl RegistryServer {
@@ -52,58 +57,24 @@ impl RegistryServer {
 
         // mio poll, use epoll / kqueue under the hood
         let mut events = Events::with_capacity(128);
-        let mut poll = Poll::new()?;
+        self.poll = Poll::new()?;
         const LISTENER: Token = Token(0);
-        poll.registry().register(
+        self.poll.registry().register(
             &mut listener,
             LISTENER,
             Interest::READABLE,
         )?;
 
-        // keep track of clients
-        let mut counter: usize = 0;
-        let mut clients: HashMap<Token, TcpStream> = HashMap::new();
-
         loop {
-            poll.poll(&mut events, None)?;
+            self.poll.poll(&mut events, None)?;
             for event in events.iter() {
                 match event.token() {
                     LISTENER => {
-                        let (mut stream, _addr) = listener.accept()?;
-
-                        counter += 1;
-                        let token = Token(counter);
-                        poll.registry().register(
-                            &mut stream,
-                            token,
-                            Interest::READABLE,
-                        )?;
-
-                        clients.insert(token, stream);
+                        let (stream, _addr) = listener.accept()?;
+                        self.handle_connection(stream)?;
                     }
                     token if event.is_readable() => {
-                        let stream = clients.get_mut(&token).unwrap();
-                        let mut buffer = [0; 256];
-                        let read = stream.read(&mut buffer);
-                        match read {
-                            Ok(0) => {
-                                clients.remove(&token);
-                                break;
-                            }
-                            Ok(size) => {
-                                if let Err(err) =
-                                    self.handle_request(stream, &buffer[..size])
-                                {
-                                    self.handle_error(stream, err)?;
-                                }
-                            }
-                            Err(ref e)
-                                if e.kind() == io::ErrorKind::WouldBlock =>
-                            {
-                                break
-                            }
-                            Err(e) => panic!("Unexpected error: {}", e),
-                        }
+                        self.handle_data(token)?;
                     }
                     _ => {}
                 }
@@ -111,31 +82,52 @@ impl RegistryServer {
         }
     }
 
-    fn handle_error(
+    fn handle_connection(
         &mut self,
-        stream: &mut TcpStream,
-        err: RegistryServerError,
+        mut stream: TcpStream,
     ) -> Result<(), RegistryServerError> {
-        error!("{}", err.to_string());
-        self.handle_response(stream, RegistryResponse::Error(err.to_string()))
-    }
+        self.id_counter += 1;
+        let token = Token(self.id_counter);
+        self.poll.registry().register(
+            &mut stream,
+            token,
+            Interest::READABLE,
+        )?;
 
-    fn _handle_connection(
-        &mut self,
-        stream: &mut TcpStream,
-    ) -> Result<(), RegistryServerError> {
         info!("handling connection from {:?}", stream.peer_addr());
+        self.token_stream_map.insert(token, stream);
         Ok(())
     }
 
-    fn handle_request(
+    fn handle_data(&mut self, token: Token) -> Result<(), RegistryServerError> {
+        let stream = self.token_stream_map.get_mut(&token).unwrap();
+        let mut buffer = [0; 256];
+        let read = stream.read(&mut buffer);
+
+        match read {
+            Ok(0) => {
+                self.token_stream_map.remove(&token);
+                Ok(())
+            }
+            Ok(size) => {
+                let err = self.handle_request(token, &buffer[..size]);
+                if let Err(err) = err {
+                    self.handle_error(token, err)?;
+                };
+                Ok(())
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            Err(e) => panic!("Unexpected error: {}", e),
+        }
+    }
+
+    fn handle_error(
         &mut self,
-        stream: &mut TcpStream,
-        data: &[u8],
+        token: Token,
+        err: RegistryServerError,
     ) -> Result<(), RegistryServerError> {
-        let message: Message = serde_json::from_slice(data)?;
-        let response = self.handle_message(message)?;
-        self.handle_response(stream, response)
+        error!("{}", err.to_string());
+        self.handle_response(token, RegistryResponse::Error(err.to_string()))
     }
 
     fn handle_message(
@@ -177,21 +169,35 @@ impl RegistryServer {
         }
     }
 
+    fn handle_request(
+        &mut self,
+        token: Token,
+        data: &[u8],
+    ) -> Result<(), RegistryServerError> {
+        let message: Message = serde_json::from_slice(data)?;
+        let response = self.handle_message(message)?;
+        self.handle_response(token, response)
+    }
+
     fn handle_response(
-        &self,
-        stream: &mut TcpStream,
+        &mut self,
+        token: Token,
         response: RegistryResponse,
     ) -> Result<(), RegistryServerError> {
+        let stream = self.token_stream_map.get_mut(&token).unwrap();
         let data = serde_json::to_vec(&registry_response!(response))?;
         stream.write_all(&data)?;
         Ok(())
     }
 
-    pub fn new(hostname: &str, port: u32) -> Self {
-        Self {
+    pub fn new(hostname: &str, port: u32) -> Result<Self, RegistryServerError> {
+        Ok(Self {
             hostname: hostname.to_string(),
             port,
             access_manager: AccessManager::new(Box::new(|_, _, _| {})),
-        }
+            token_stream_map: HashMap::new(),
+            id_counter: 0,
+            poll: Poll::new()?,
+        })
     }
 }

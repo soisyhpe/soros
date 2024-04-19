@@ -76,7 +76,7 @@ impl ProtocolClient {
         self.registry_expect_success()
     }
 
-    fn registry_expect_holder(
+    pub fn registry_expect_holder(
         &mut self,
     ) -> Result<ProcId, ProtocolClientError> {
         match self.registry_handle_response()? {

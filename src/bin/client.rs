@@ -8,7 +8,13 @@ fn main() -> Result<(), ProtocolClientError> {
     let mut protocol_client = ProtocolClient::new(1, "localhost", 8888)?;
     protocol_client.registry_create(10)?;
     protocol_client.registry_request_write(10)?;
+
+    let _ = protocol_client.registry_request_read(10);
     protocol_client.registry_request_release(10)?;
+    info!("Awaiting read request result");
+    let holder = protocol_client.registry_expect_holder()?;
+    info!("Got holder: {:?}", holder);
+
     let data_user = protocol_client.registry_request_read(10)?;
     info!("Data user of key: {:?}", data_user);
     protocol_client.registry_request_release(10)?;
