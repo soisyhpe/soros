@@ -18,7 +18,9 @@ pub enum RwQueueError {
     KeyNotFound(KeyId),
 }
 
+/// Unique identifier for a process.
 type ProcId = usize;
+/// Unique identifier for a key.
 type KeyId = usize;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -27,16 +29,30 @@ pub enum RequestType {
     Reader,
 }
 
+/// Closure called when access is granted to a process.
 pub type OnAccessGranted = Box<dyn Fn(ProcId, KeyId, RequestType)>;
 
-#[derive(Debug, Default)]
+/// Current state of a specific key, tracking current readers and writer.
+/// Pending requests are processed alternately to ensure fair access.
+/// `creator` indicates the holder of the resource in case of no readers / writer.
+#[derive(Debug)]
 pub struct KeyState {
     pending_request: VecDeque<(ProcId, RequestType)>,
     readers: HashSet<ProcId>,
     writer: Option<ProcId>,
+    pub creator: ProcId,
 }
 
 impl KeyState {
+    pub fn new(creator: ProcId) -> Self {
+        Self {
+            pending_request: VecDeque::new(),
+            readers: HashSet::new(),
+            writer: None,
+            creator,
+        }
+    }
+
     fn register_reader(&mut self, proc_id: ProcId) {
         self.readers.insert(proc_id);
     }
@@ -62,12 +78,16 @@ impl fmt::Debug for RwQueue {
 
 impl RwQueue {
     /// Create a new key if it does not already exist.
-    pub fn create(&mut self, key_id: KeyId) -> Result<(), RwQueueError> {
+    pub fn create(
+        &mut self,
+        proc_id: ProcId,
+        key_id: KeyId,
+    ) -> Result<(), RwQueueError> {
         if self.key_states.contains_key(&key_id) {
             return Err(RwQueueError::KeyExists(key_id));
         }
 
-        self.key_states.insert(key_id, KeyState::default());
+        self.key_states.insert(key_id, KeyState::new(proc_id));
         Ok(())
     }
 
@@ -138,7 +158,7 @@ impl RwQueue {
         }
     }
 
-    /// Release write / read access by a proc.
+    /// Release write / read access for a process.
     pub fn release(
         &mut self,
         proc_id: ProcId,
@@ -167,7 +187,7 @@ impl RwQueue {
         Ok(())
     }
 
-    /// Request read access by a proc.
+    /// Request read access for a process.
     /// Multiple read are possible at the same time.
     pub fn request_read(
         &mut self,
@@ -192,7 +212,7 @@ impl RwQueue {
         Ok(())
     }
 
-    /// Reqest write access by a proc.
+    /// Reqest write access for a process.
     /// Only one write access at a time.
     pub fn request_write(
         &mut self,
@@ -241,9 +261,9 @@ mod tests {
     fn test_create() -> Result<(), RwQueueError> {
         let mut queue = create_queue();
         assert!(queue.get_key_state(0).is_err());
-        queue.create(0)?;
-        assert!(queue.get_key_state(0).is_ok());
-        assert!(queue.create(0).is_err());
+        queue.create(2, 0)?;
+        assert_eq!(queue.get_key_state(0)?.creator, 2);
+        assert!(queue.create(0, 0).is_err());
         Ok(())
     }
 
@@ -251,7 +271,7 @@ mod tests {
     fn test_delete() -> Result<(), RwQueueError> {
         let mut queue = create_queue();
         assert!(queue.delete(0).is_err());
-        queue.create(0)?;
+        queue.create(0, 0)?;
         queue.delete(0)?;
         assert!(queue.get_key_state(0).is_err());
         Ok(())
@@ -261,7 +281,7 @@ mod tests {
     fn test_request_read() -> Result<(), RwQueueError> {
         let mut queue = create_queue();
         assert!(queue.request_read(1, 0).is_err());
-        queue.create(0)?;
+        queue.create(0, 0)?;
         queue.request_read(1, 0)?;
         queue.request_read(2, 0)?;
         queue.request_read(3, 0)?;
@@ -274,7 +294,7 @@ mod tests {
     fn test_request_write() -> Result<(), RwQueueError> {
         let mut queue = create_queue();
         assert!(queue.request_write(1, 0).is_err());
-        queue.create(0)?;
+        queue.create(0, 0)?;
         queue.request_write(1, 0)?;
         assert!(queue.request_write(2, 0).is_err());
         assert_eq!(
@@ -288,7 +308,7 @@ mod tests {
     #[test]
     fn test_request_read_before_write() -> Result<(), RwQueueError> {
         let mut queue = create_queue();
-        queue.create(0)?;
+        queue.create(0, 0)?;
         queue.request_read(1, 0)?;
         queue.request_read(2, 0)?;
         assert!(queue.request_write(3, 0).is_err());
@@ -303,7 +323,7 @@ mod tests {
     #[test]
     fn test_request_write_before_read() -> Result<(), RwQueueError> {
         let mut queue = create_queue();
-        queue.create(0)?;
+        queue.create(0, 0)?;
         queue.request_write(1, 0)?;
         assert!(queue.request_read(2, 0).is_err());
         assert!(queue.request_write(3, 0).is_err());
@@ -317,7 +337,7 @@ mod tests {
     #[test]
     fn test_release_read() -> Result<(), RwQueueError> {
         let mut queue = create_queue();
-        queue.create(0)?;
+        queue.create(0, 0)?;
         assert!(queue.release(1, 0).is_err());
         queue.request_read(1, 0)?;
         assert!(queue.release(2, 0).is_err());
@@ -329,7 +349,7 @@ mod tests {
     #[test]
     fn test_release_write() -> Result<(), RwQueueError> {
         let mut queue = create_queue();
-        queue.create(0)?;
+        queue.create(0, 0)?;
         assert!(queue.release(1, 0).is_err());
         queue.request_write(1, 0)?;
         assert!(queue.release(2, 0).is_err());
@@ -350,7 +370,7 @@ mod tests {
     #[test]
     fn test_handling_read_before_write() -> Result<(), RwQueueError> {
         let (mut queue, fn_tx, call_rx) = create_queue_with_grant();
-        queue.create(0)?;
+        queue.create(0, 0)?;
         queue.request_read(1, 0)?;
         assert!(queue.request_write(2, 0).is_err());
         assert!(queue.request_read(3, 0).is_err());
@@ -369,7 +389,7 @@ mod tests {
     #[test]
     fn test_handling_write_before_read() -> Result<(), RwQueueError> {
         let (mut queue, fn_tx, call_rx) = create_queue_with_grant();
-        queue.create(0)?;
+        queue.create(0, 0)?;
         queue.request_write(1, 0)?;
         assert!(queue.request_read(2, 0).is_err());
         assert!(queue.request_read(3, 0).is_err());
@@ -397,7 +417,8 @@ mod tests {
     fn test_fairness() -> Result<(), RwQueueError> {
         let (mut queue, fn_tx, call_rx) = create_queue_with_grant();
         let (x, a, b, c, d) = (0, 1, 2, 3, 4);
-        queue.create(x)?;
+        queue.create(a, x)?;
+        assert_eq!(queue.get_key_state(x)?.creator, a);
 
         queue.request_read(a, x)?;
         assert!(queue.request_write(c, x).is_err());
