@@ -68,7 +68,15 @@ impl RwQueue {
         }
 
         self.key_states.insert(key_id, KeyState::default());
+        Ok(())
+    }
 
+    pub fn delete(&mut self, key_id: KeyId) -> Result<(), RwQueueError> {
+        if !self.key_states.contains_key(&key_id) {
+            return Err(RwQueueError::KeyNotFound(key_id));
+        }
+
+        self.key_states.remove(&key_id);
         Ok(())
     }
 
@@ -236,6 +244,16 @@ mod tests {
         queue.create(0)?;
         assert!(queue.get_key_state(0).is_ok());
         assert!(queue.create(0).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete() -> Result<(), RwQueueError> {
+        let mut queue = create_queue();
+        assert!(queue.delete(0).is_err());
+        queue.create(0)?;
+        queue.delete(0)?;
+        assert!(queue.get_key_state(0).is_err());
         Ok(())
     }
 
