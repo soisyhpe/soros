@@ -100,7 +100,12 @@ impl ProtocolClient {
         let size = self.stream.read(&mut buffer)?;
         let message = serde_json::from_slice(&buffer[..size])?;
         match message {
-            Message::Registry(RegistryMessage::Response(resp)) => Ok(resp),
+            Message::Registry(RegistryMessage::Response(resp)) => match resp {
+                RegistryResponse::Error(err) => {
+                    Err(ProtocolClientError::RegistryError(err))
+                }
+                _ => Ok(resp),
+            },
             _ => Err(ProtocolClientError::UnexpectedResponse),
         }
     }
