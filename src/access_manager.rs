@@ -1,4 +1,5 @@
 use crate::protocol::{KeyId, ProcId, RequestType};
+use log::info;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
@@ -9,17 +10,17 @@ use thiserror::Error;
 #[non_exhaustive]
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AccessManagerError {
-    #[error("Send error: {0}")]
+    #[error("send error: {0}")]
     SendError(#[from] SendError<AccessGranted>),
-    #[error("Could not grant access request for proc: {0}, with key: {1}")]
+    #[error("could not grant access request for proc: {0}, with key: {1}")]
     RequestAccess(ProcId, KeyId),
-    #[error("Could not release access for proc: {0}, with key: {1}")]
+    #[error("could not release access for proc: {0}, with key: {1}")]
     ReleaseAccess(ProcId, KeyId),
-    #[error("Key currently accessed")]
+    #[error("key currently accessed")]
     KeyAccessed,
-    #[error("Key already exist: {0}")]
+    #[error("key already exist: {0}")]
     KeyExists(KeyId),
-    #[error("Key not found: {0}")]
+    #[error("key not found: {0}")]
     KeyNotFound(KeyId),
 }
 
@@ -99,6 +100,7 @@ impl AccessManager {
         proc_id: ProcId,
         key_id: KeyId,
     ) -> Result<(), AccessManagerError> {
+        info!("Create request for proc: {}, key: {}", proc_id, key_id);
         if self.key_states.contains_key(&key_id) {
             return Err(AccessManagerError::KeyExists(key_id));
         }
@@ -108,6 +110,7 @@ impl AccessManager {
     }
 
     pub fn delete(&mut self, key_id: KeyId) -> Result<(), AccessManagerError> {
+        info!("Delete request for key: {}", key_id);
         let key_state = self.get_key_state(key_id)?;
         if !key_state.readers.is_empty() || key_state.writer.is_some() {
             return Err(AccessManagerError::KeyAccessed);
@@ -196,6 +199,7 @@ impl AccessManager {
         proc_id: ProcId,
         key_id: KeyId,
     ) -> Result<ProcId, AccessManagerError> {
+        info!("Read request for proc: {}, key: {}", proc_id, key_id);
         let key_state = self.get_key_state_mut(key_id)?;
 
         let requesting_writer = key_state
@@ -222,6 +226,7 @@ impl AccessManager {
         proc_id: ProcId,
         key_id: KeyId,
     ) -> Result<(), AccessManagerError> {
+        info!("Release request for proc: {}, key: {}", proc_id, key_id);
         let key_state = self.get_key_state_mut(key_id)?;
 
         let writer_release =
@@ -252,6 +257,7 @@ impl AccessManager {
         proc_id: ProcId,
         key_id: KeyId,
     ) -> Result<(), AccessManagerError> {
+        info!("Write request for proc: {}, key: {}", proc_id, key_id);
         let key_state = self.get_key_state_mut(key_id)?;
 
         if !key_state.readers.is_empty() || key_state.writer.is_some() {
