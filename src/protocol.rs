@@ -37,6 +37,8 @@ pub enum RequestType {
 /// Represent a message related to the registry
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RegistryMessage {
+    /// Unique proc id given by the registry server during connection
+    Connection(ProcId),
     /// Request for accessing registry data.
     Request {
         request_type: RequestType,
@@ -64,6 +66,13 @@ macro_rules! registry_request {
             key_id: $key_id,
             request_type: $request_type,
         })
+    };
+}
+
+#[macro_export]
+macro_rules! registry_connection {
+    ($proc_id: expr) => {
+        Message::Registry(RegistryMessage::Connection($proc_id))
     };
 }
 

@@ -30,22 +30,33 @@ pub struct ProtocolClient {
     pub hostname: String,
     pub port: u32,
     pub proc_id: ProcId,
-    stream: TcpStream,
+    registry_stream: TcpStream,
 }
 
 impl ProtocolClient {
-    pub fn new(
-        proc_id: ProcId,
-        hostname: &str,
-        port: u32,
-    ) -> Result<Self, ProtocolClientError> {
+    pub fn new(hostname: &str, port: u32) -> Result<Self, ProtocolClientError> {
         info!("Connecting to registry on {}:{}", hostname, port);
+        let mut registry_stream =
+            TcpStream::connect(format!("{}:{}", hostname, port))?;
+        let proc_id =
+            ProtocolClient::registry_handle_connection(&mut registry_stream)?;
+        info!("Given proc id is {}", proc_id);
+
         Ok(Self {
             proc_id,
             hostname: hostname.to_string(),
             port,
-            stream: TcpStream::connect(format!("{}:{}", hostname, port))?,
+            registry_stream,
         })
+    }
+
+    fn receive_message(
+        stream: &mut TcpStream,
+    ) -> Result<Message, ProtocolClientError> {
+        let mut buffer = [0; 256];
+        let size = stream.read(&mut buffer)?;
+        let message = serde_json::from_slice(&buffer[..size])?;
+        Ok(message)
     }
 
     pub fn registry_create(
@@ -55,18 +66,6 @@ impl ProtocolClient {
         info!("Registry create: {:?}", key_id);
         self.registry_send_request(key_id, RequestType::Create)?;
         self.registry_expect_success()
-    }
-
-    fn registry_send_request(
-        &mut self,
-        key_id: KeyId,
-        request_type: RequestType,
-    ) -> Result<(), ProtocolClientError> {
-        let message = registry_request!(self.proc_id, key_id, request_type);
-        let data =
-            serde_json::to_vec(&message).map_err(ProtocolClientError::from)?;
-        self.stream.write_all(&data)?;
-        Ok(())
     }
 
     pub fn registry_delete(
@@ -96,13 +95,22 @@ impl ProtocolClient {
         }
     }
 
+    /// The registry give back a processus id at connection.
+    fn registry_handle_connection(
+        registry_stream: &mut TcpStream,
+    ) -> Result<ProcId, ProtocolClientError> {
+        match ProtocolClient::receive_message(registry_stream)? {
+            Message::Registry(RegistryMessage::Connection(proc_id)) => {
+                Ok(proc_id)
+            }
+            _ => Err(ProtocolClientError::UnexpectedResponse),
+        }
+    }
+
     fn registry_handle_response(
         &mut self,
     ) -> Result<RegistryResponse, ProtocolClientError> {
-        let mut buffer = [0; 256];
-        let size = self.stream.read(&mut buffer)?;
-        let message = serde_json::from_slice(&buffer[..size])?;
-        match message {
+        match ProtocolClient::receive_message(&mut self.registry_stream)? {
             Message::Registry(RegistryMessage::Response(resp)) => match resp {
                 RegistryResponse::Error(err) => {
                     Err(ProtocolClientError::RegistryError(err))
@@ -130,6 +138,18 @@ impl ProtocolClient {
         info!("Registry release: {:?}", key_id);
         self.registry_send_request(key_id, RequestType::Release)?;
         self.registry_expect_success()
+    }
+
+    fn registry_send_request(
+        &mut self,
+        key_id: KeyId,
+        request_type: RequestType,
+    ) -> Result<(), ProtocolClientError> {
+        let message = registry_request!(self.proc_id, key_id, request_type);
+        let data =
+            serde_json::to_vec(&message).map_err(ProtocolClientError::from)?;
+        self.registry_stream.write_all(&data)?;
+        Ok(())
     }
 
     pub fn registry_write(

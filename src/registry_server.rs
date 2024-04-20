@@ -3,7 +3,7 @@ use crate::{
     protocol::{
         Message, ProcId, RegistryMessage, RegistryResponse, RequestType,
     },
-    registry_response,
+    registry_connection, registry_response,
 };
 use log::{error, info};
 use mio::{
@@ -97,7 +97,10 @@ impl RegistryServer {
         )?;
 
         info!("handling connection from {:?}", stream.peer_addr());
+        let data = serde_json::to_vec(&registry_connection!(token.0))?;
+        stream.write_all(&data)?;
         self.token_stream_map.insert(token, stream);
+
         Ok(())
     }
 
