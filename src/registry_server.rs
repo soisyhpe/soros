@@ -154,11 +154,11 @@ impl RegistryServer {
                         .map(|_| RegistryResponse::Success),
                     RequestType::Read => self
                         .access_manager
-                        .request_read(proc_id, key_id)
+                        .read(proc_id, key_id)
                         .map(RegistryResponse::Holder),
                     RequestType::Write => self
                         .access_manager
-                        .request_write(proc_id, key_id)
+                        .write(proc_id, key_id)
                         .map(|_| RegistryResponse::Success),
                     RequestType::Release => self
                         .access_manager

@@ -201,7 +201,7 @@ impl AccessManager {
 
     /// Request read access for a process.
     /// Multiple read are possible at the same time.
-    pub fn request_read(
+    pub fn read(
         &mut self,
         proc_id: ProcId,
         key_id: KeyId,
@@ -234,7 +234,7 @@ impl AccessManager {
 
     /// Reqest write access for a process.
     /// Only one write access at a time.
-    pub fn request_write(
+    pub fn write(
         &mut self,
         proc_id: ProcId,
         key_id: KeyId,
@@ -283,13 +283,13 @@ mod tests {
     }
 
     #[test]
-    fn test_request_read() -> Result<(), AccessManagerError> {
+    fn test_read() -> Result<(), AccessManagerError> {
         let mut manager = create_manager();
-        assert!(manager.request_read(1, 0).is_err());
+        assert!(manager.read(1, 0).is_err());
         manager.create(0, 0)?;
-        manager.request_read(1, 0)?;
-        manager.request_read(2, 0)?;
-        manager.request_read(3, 0)?;
+        manager.read(1, 0)?;
+        manager.read(2, 0)?;
+        manager.read(3, 0)?;
         assert!(manager.delete(0).is_err());
         assert_eq!(manager.get_key_state(0)?.pending_request, vec![]);
         assert_eq!(manager.get_key_state(0)?.readers, HashSet::from([1, 2, 3]));
@@ -297,13 +297,13 @@ mod tests {
     }
 
     #[test]
-    fn test_request_write() -> Result<(), AccessManagerError> {
+    fn test_write() -> Result<(), AccessManagerError> {
         let mut manager = create_manager();
-        assert!(manager.request_write(1, 0).is_err());
+        assert!(manager.write(1, 0).is_err());
         manager.create(0, 0)?;
-        manager.request_write(1, 0)?;
+        manager.write(1, 0)?;
         assert!(manager.delete(0).is_err());
-        assert!(manager.request_write(2, 0).is_err());
+        assert!(manager.write(2, 0).is_err());
         assert_eq!(
             manager.get_key_state(0)?.pending_request,
             vec![(2, RequestType::Write)]
@@ -313,13 +313,13 @@ mod tests {
     }
 
     #[test]
-    fn test_request_read_before_write() -> Result<(), AccessManagerError> {
+    fn test_read_before_write() -> Result<(), AccessManagerError> {
         let mut manager = create_manager();
         manager.create(0, 0)?;
-        manager.request_read(1, 0)?;
-        manager.request_read(2, 0)?;
-        assert!(manager.request_write(3, 0).is_err());
-        assert!(manager.request_read(4, 0).is_err());
+        manager.read(1, 0)?;
+        manager.read(2, 0)?;
+        assert!(manager.write(3, 0).is_err());
+        assert!(manager.read(4, 0).is_err());
         assert_eq!(
             manager.get_key_state(0)?.pending_request,
             vec![(3, RequestType::Write), (4, RequestType::Read)]
@@ -328,12 +328,12 @@ mod tests {
     }
 
     #[test]
-    fn test_request_write_before_read() -> Result<(), AccessManagerError> {
+    fn test_write_before_read() -> Result<(), AccessManagerError> {
         let mut manager = create_manager();
         manager.create(0, 0)?;
-        manager.request_write(1, 0)?;
-        assert!(manager.request_read(2, 0).is_err());
-        assert!(manager.request_write(3, 0).is_err());
+        manager.write(1, 0)?;
+        assert!(manager.read(2, 0).is_err());
+        assert!(manager.write(3, 0).is_err());
         assert_eq!(
             manager.get_key_state(0)?.pending_request,
             vec![(2, RequestType::Read), (3, RequestType::Write)]
@@ -346,7 +346,7 @@ mod tests {
         let mut manager = create_manager();
         manager.create(0, 0)?;
         assert!(manager.release(1, 0).is_err());
-        manager.request_read(1, 0)?;
+        manager.read(1, 0)?;
         assert!(manager.release(2, 0).is_err());
         manager.release(1, 0)?;
         assert!(manager.get_key_state(0)?.readers.is_empty());
@@ -358,7 +358,7 @@ mod tests {
         let mut manager = create_manager();
         manager.create(0, 0)?;
         assert!(manager.release(1, 0).is_err());
-        manager.request_write(1, 0)?;
+        manager.write(1, 0)?;
         assert!(manager.release(2, 0).is_err());
         manager.release(1, 0)?;
         assert_eq!(manager.get_key_state(0)?.writer, None);
@@ -376,9 +376,9 @@ mod tests {
     fn test_handling_read_before_write() -> Result<(), AccessManagerError> {
         let mut manager = create_manager();
         manager.create(0, 0)?;
-        manager.request_read(1, 0)?;
-        assert!(manager.request_write(2, 0).is_err());
-        assert!(manager.request_read(3, 0).is_err());
+        manager.read(1, 0)?;
+        assert!(manager.write(2, 0).is_err());
+        assert!(manager.read(3, 0).is_err());
 
         manager.release(1, 0)?;
         assert_grant!(manager, 2, 0, RequestType::Write);
@@ -393,11 +393,11 @@ mod tests {
     fn test_handling_write_before_read() -> Result<(), AccessManagerError> {
         let mut manager = create_manager();
         manager.create(0, 0)?;
-        manager.request_write(1, 0)?;
-        assert!(manager.request_read(2, 0).is_err());
-        assert!(manager.request_read(3, 0).is_err());
-        assert!(manager.request_read(4, 0).is_err());
-        assert!(manager.request_write(5, 0).is_err());
+        manager.write(1, 0)?;
+        assert!(manager.read(2, 0).is_err());
+        assert!(manager.read(3, 0).is_err());
+        assert!(manager.read(4, 0).is_err());
+        assert!(manager.write(5, 0).is_err());
 
         manager.release(1, 0)?;
         assert_grant!(manager, 2, 0, RequestType::Read);
@@ -421,9 +421,9 @@ mod tests {
         manager.create(a, x)?;
         assert_eq!(manager.get_key_state(x)?.creator, a);
 
-        manager.request_read(a, x)?;
-        assert!(manager.request_write(c, x).is_err());
-        assert!(manager.request_read(b, x).is_err());
+        manager.read(a, x)?;
+        assert!(manager.write(c, x).is_err());
+        assert!(manager.read(b, x).is_err());
         assert_eq!(
             manager.get_key_state(x)?.pending_request,
             vec![(c, RequestType::Write), (b, RequestType::Read)]
@@ -436,7 +436,7 @@ mod tests {
             vec![(b, RequestType::Read)]
         );
 
-        assert!(manager.request_read(d, x).is_err());
+        assert!(manager.read(d, x).is_err());
         assert_eq!(
             manager.get_key_state(x)?.pending_request,
             vec![(b, RequestType::Read), (d, RequestType::Read)]

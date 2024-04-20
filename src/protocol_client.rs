@@ -51,11 +51,11 @@ impl ProtocolClient {
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
         info!("Registry create: {:?}", key_id);
-        self.registry_create_request(key_id, RequestType::Create)?;
+        self.registry_send_request(key_id, RequestType::Create)?;
         self.registry_expect_success()
     }
 
-    fn registry_create_request(
+    fn registry_send_request(
         &mut self,
         key_id: KeyId,
         request_type: RequestType,
@@ -72,7 +72,7 @@ impl ProtocolClient {
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
         info!("Registry delete: {:?}", key_id);
-        self.registry_create_request(key_id, RequestType::Delete)?;
+        self.registry_send_request(key_id, RequestType::Delete)?;
         self.registry_expect_success()
     }
 
@@ -111,30 +111,30 @@ impl ProtocolClient {
         }
     }
 
-    pub fn registry_request_read(
+    pub fn registry_read(
         &mut self,
         key_id: KeyId,
     ) -> Result<ProcId, ProtocolClientError> {
         info!("Registry read: {:?}", key_id);
-        self.registry_create_request(key_id, RequestType::Read)?;
+        self.registry_send_request(key_id, RequestType::Read)?;
         self.registry_expect_holder()
     }
 
-    pub fn registry_request_release(
+    pub fn registry_release(
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
         info!("Registry release: {:?}", key_id);
-        self.registry_create_request(key_id, RequestType::Release)?;
+        self.registry_send_request(key_id, RequestType::Release)?;
         self.registry_expect_success()
     }
 
-    pub fn registry_request_write(
+    pub fn registry_write(
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
         info!("Registry write: {:?}", key_id);
-        self.registry_create_request(key_id, RequestType::Write)?;
+        self.registry_send_request(key_id, RequestType::Write)?;
         self.registry_expect_success()
     }
 }
