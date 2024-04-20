@@ -65,6 +65,7 @@ impl ProtocolClient {
         Ok(message)
     }
 
+    /// Send a create request to the registry.
     pub fn registry_create(
         &mut self,
         key_id: KeyId,
@@ -74,6 +75,7 @@ impl ProtocolClient {
         self.registry_expect_success(key_id)
     }
 
+    /// Send a delete request to the registry.
     pub fn registry_delete(
         &mut self,
         key_id: KeyId,
@@ -83,6 +85,7 @@ impl ProtocolClient {
         self.registry_expect_success(key_id)
     }
 
+    /// Expect a response from the registry with the holder of the specified key.
     pub fn registry_expect_holder(
         &mut self,
         key_id: KeyId,
@@ -97,6 +100,7 @@ impl ProtocolClient {
         }
     }
 
+    /// Expect a success response from the registry for the specified key.
     pub fn registry_expect_success(
         &mut self,
         key_id: KeyId,
@@ -109,7 +113,7 @@ impl ProtocolClient {
         }
     }
 
-    /// The registry give back a processus id at connection.
+    /// Handle the initial connection to the registry, retrieving the process id.
     fn registry_handle_connection(
         registry_stream: &mut TcpStream,
     ) -> Result<ProcId, ProtocolClientError> {
@@ -138,6 +142,7 @@ impl ProtocolClient {
         }
     }
 
+    /// Send a read request to the registry.
     pub fn registry_read(
         &mut self,
         key_id: KeyId,
@@ -147,6 +152,7 @@ impl ProtocolClient {
         self.registry_expect_holder(key_id)
     }
 
+    /// Send a read request to the registry, wait until it's granted.
     pub fn registry_read_sync(
         &mut self,
         key_id: KeyId,
@@ -161,6 +167,7 @@ impl ProtocolClient {
         }
     }
 
+    /// Send a release request to the registry.
     pub fn registry_release(
         &mut self,
         key_id: KeyId,
@@ -182,6 +189,7 @@ impl ProtocolClient {
         Ok(())
     }
 
+    /// Send a write request to the registry.
     pub fn registry_write(
         &mut self,
         key_id: KeyId,
@@ -191,6 +199,7 @@ impl ProtocolClient {
         self.registry_expect_success(key_id)
     }
 
+    /// Send a write request to the registry, wait until it's granted.
     pub fn registry_write_sync(
         &mut self,
         key_id: KeyId,
