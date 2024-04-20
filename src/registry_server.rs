@@ -152,14 +152,30 @@ impl RegistryServer {
                         .access_manager
                         .delete(key_id)
                         .map(|_| RegistryResponse::Success),
-                    RequestType::Read => self
-                        .access_manager
-                        .read(proc_id, key_id)
-                        .map(RegistryResponse::Holder),
-                    RequestType::Write => self
-                        .access_manager
-                        .write(proc_id, key_id)
-                        .map(|_| RegistryResponse::Success),
+                    RequestType::Read => {
+                        let err = self
+                            .access_manager
+                            .read(proc_id, key_id)
+                            .map(RegistryResponse::Holder);
+                        match err {
+                            Err(AccessManagerError::RequestAccess(_, _)) => {
+                                Ok(RegistryResponse::Wait)
+                            }
+                            _ => err,
+                        }
+                    }
+                    RequestType::Write => {
+                        let err = self
+                            .access_manager
+                            .write(proc_id, key_id)
+                            .map(|_| RegistryResponse::Success);
+                        match err {
+                            Err(AccessManagerError::RequestAccess(_, _)) => {
+                                Ok(RegistryResponse::Wait)
+                            }
+                            _ => err,
+                        }
+                    }
                     RequestType::Release => self
                         .access_manager
                         .release(proc_id, key_id)

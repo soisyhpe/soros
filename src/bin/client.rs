@@ -9,9 +9,11 @@ fn main() -> Result<(), ProtocolClientError> {
     protocol_client.registry_create(10)?;
     protocol_client.registry_write(10)?;
 
-    let _ = protocol_client.registry_read(10);
-    protocol_client.registry_release(10)?;
-    info!("Awaiting read requests result");
+    let err = protocol_client.registry_read(10);
+    if let Err(ProtocolClientError::WaitError) = err {
+        info!("Waiting...");
+        protocol_client.registry_release(10)?
+    }
     protocol_client.registry_expect_success()?;
     protocol_client.registry_release(10)?;
 

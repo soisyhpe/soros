@@ -21,6 +21,8 @@ pub enum ProtocolClientError {
     RegistryError(String),
     #[error("Unexpected response")]
     UnexpectedResponse,
+    #[error("Wait error")]
+    WaitError,
 }
 
 #[derive(Debug)]
@@ -105,6 +107,7 @@ impl ProtocolClient {
                 RegistryResponse::Error(err) => {
                     Err(ProtocolClientError::RegistryError(err))
                 }
+                RegistryResponse::Wait => Err(ProtocolClientError::WaitError),
                 _ => Ok(resp),
             },
             _ => Err(ProtocolClientError::UnexpectedResponse),

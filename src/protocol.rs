@@ -18,6 +18,8 @@ pub enum Message {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RegistryResponse {
     Success,
+    /// The request cannot be fullfilled yet
+    Wait,
     /// Return a process id using the data, can be used for the peer-to-peer protocol.
     Holder(ProcId),
     Error(String),
