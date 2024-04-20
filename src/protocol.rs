@@ -17,11 +17,11 @@ pub enum Message {
 /// Represents different kind of responses from the registry.
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RegistryResponse {
-    Success,
+    Success(KeyId),
     /// The request cannot be fullfilled yet
-    Wait,
+    Wait(KeyId),
     /// Return a process id using the data, can be used for the peer-to-peer protocol.
-    Holder(ProcId),
+    Holder(KeyId, ProcId),
     Error(String),
 }
 

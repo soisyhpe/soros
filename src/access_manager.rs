@@ -24,7 +24,13 @@ pub enum AccessManagerError {
 }
 
 /// Data sent to the channel when an access is granted to a process.
-pub type AccessGranted = (ProcId, KeyId, RequestType);
+///
+/// Contains the following information:
+/// - The granted process id.
+/// - The key associated with the access.
+/// - The type of request.
+/// - The id of the holder.
+pub type AccessGranted = (ProcId, KeyId, RequestType, ProcId);
 
 /// Current state of a specific key, tracking current readers and writer.
 /// Pending requests are processed alternately to ensure fair access.
@@ -53,6 +59,15 @@ impl KeyState {
 
     fn register_writer(&mut self, proc_id: ProcId) {
         self.writer = Some(proc_id);
+    }
+
+    // Find a processus that knows the key's data
+    // The writer has the priority, because he can modify the data
+    fn holder(&self) -> ProcId {
+        if let Some(writer) = self.writer {
+            return writer;
+        }
+        self.creator
     }
 }
 
@@ -130,12 +145,15 @@ impl AccessManager {
         else {
             return Ok(());
         };
+        let data_user = key_state.holder();
+
         match req_type {
             RequestType::Write => {
                 self.access_granted_tx.send((
                     *proc_id,
                     key_id,
                     RequestType::Write,
+                    data_user,
                 ))?;
                 key_state.register_writer(*proc_id);
                 key_state.pending_request.pop_front();
@@ -149,6 +167,7 @@ impl AccessManager {
                         *proc_id,
                         key_id,
                         RequestType::Read,
+                        data_user,
                     ))?;
                     key_state.register_reader(*proc_id);
                     key_state.pending_request.pop_front();
@@ -168,6 +187,33 @@ impl AccessManager {
             access_granted_rx: access_rx,
             key_states: HashMap::new(),
         }
+    }
+
+    /// Request read access for a process.
+    /// Multiple read are possible at the same time.
+    pub fn read(
+        &mut self,
+        proc_id: ProcId,
+        key_id: KeyId,
+    ) -> Result<ProcId, AccessManagerError> {
+        let key_state = self.get_key_state_mut(key_id)?;
+
+        let requesting_writer = key_state
+            .pending_request
+            .front()
+            .is_some_and(|req| matches!(req.1, RequestType::Write));
+
+        if key_state.writer.is_some() || requesting_writer {
+            key_state
+                .pending_request
+                .push_back((proc_id, RequestType::Read));
+            return Err(AccessManagerError::RequestAccess(proc_id, key_id));
+        }
+
+        key_state.register_reader(proc_id);
+        let data_user = key_state.holder();
+
+        Ok(data_user)
     }
 
     /// Release write / read access for a process.
@@ -197,39 +243,6 @@ impl AccessManager {
         }
 
         Ok(())
-    }
-
-    /// Request read access for a process.
-    /// Multiple read are possible at the same time.
-    pub fn read(
-        &mut self,
-        proc_id: ProcId,
-        key_id: KeyId,
-    ) -> Result<ProcId, AccessManagerError> {
-        let key_state = self.get_key_state_mut(key_id)?;
-
-        let requesting_writer = key_state
-            .pending_request
-            .front()
-            .is_some_and(|req| matches!(req.1, RequestType::Write));
-
-        if key_state.writer.is_some() || requesting_writer {
-            key_state
-                .pending_request
-                .push_back((proc_id, RequestType::Read));
-            return Err(AccessManagerError::RequestAccess(proc_id, key_id));
-        }
-
-        key_state.register_reader(proc_id);
-
-        // Find a processus that knows the key's data
-        // The writer has the priority, because he can modify the data
-        let mut data_user = key_state.creator;
-        if let Some(writer) = key_state.writer {
-            data_user = writer;
-        }
-
-        Ok(data_user)
     }
 
     /// Reqest write access for a process.
@@ -366,9 +379,9 @@ mod tests {
     }
 
     macro_rules! assert_grant {
-        ($manager:expr, $proc:expr, $key:expr, $req:expr) => {
+        ($manager:expr, $proc:expr, $key:expr, $req:expr, $holder:expr) => {
             let data = $manager.access_granted_rx.try_recv().unwrap();
-            assert_eq!(data, ($proc, $key, $req));
+            assert_eq!(data, ($proc, $key, $req, $holder));
         };
     }
 
@@ -381,10 +394,10 @@ mod tests {
         assert!(manager.read(3, 0).is_err());
 
         manager.release(1, 0)?;
-        assert_grant!(manager, 2, 0, RequestType::Write);
+        assert_grant!(manager, 2, 0, RequestType::Write, 0);
 
         manager.release(2, 0)?;
-        assert_grant!(manager, 3, 0, RequestType::Read);
+        assert_grant!(manager, 3, 0, RequestType::Read, 0);
 
         Ok(())
     }
@@ -400,15 +413,15 @@ mod tests {
         assert!(manager.write(5, 0).is_err());
 
         manager.release(1, 0)?;
-        assert_grant!(manager, 2, 0, RequestType::Read);
-        assert_grant!(manager, 3, 0, RequestType::Read);
-        assert_grant!(manager, 4, 0, RequestType::Read);
+        assert_grant!(manager, 2, 0, RequestType::Read, 0);
+        assert_grant!(manager, 3, 0, RequestType::Read, 0);
+        assert_grant!(manager, 4, 0, RequestType::Read, 0);
 
         manager.release(2, 0)?;
         manager.release(3, 0)?;
         assert_eq!(manager.access_granted_rx.try_iter().count(), 0);
         manager.release(4, 0)?;
-        assert_grant!(manager, 5, 0, RequestType::Write);
+        assert_grant!(manager, 5, 0, RequestType::Write, 0);
 
         Ok(())
     }
@@ -430,7 +443,7 @@ mod tests {
         );
 
         manager.release(a, x)?;
-        assert_grant!(manager, c, x, RequestType::Write);
+        assert_grant!(manager, c, x, RequestType::Write, 0);
         assert_eq!(
             manager.get_key_state(x)?.pending_request,
             vec![(b, RequestType::Read)]

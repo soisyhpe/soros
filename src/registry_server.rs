@@ -5,7 +5,7 @@ use crate::{
     },
     registry_connection, registry_response,
 };
-use log::{error, info};
+use log::{error, info, warn};
 use mio::{
     net::{TcpListener, TcpStream},
     Events, Interest, Poll, Token,
@@ -150,19 +150,25 @@ impl RegistryServer {
                     RequestType::Create => self
                         .access_manager
                         .create(proc_id, key_id)
-                        .map(|_| RegistryResponse::Success),
+                        .map(|_| RegistryResponse::Success(key_id)),
                     RequestType::Delete => self
                         .access_manager
                         .delete(key_id)
-                        .map(|_| RegistryResponse::Success),
+                        .map(|_| RegistryResponse::Success(key_id)),
                     RequestType::Read => {
                         let err = self
                             .access_manager
                             .read(proc_id, key_id)
-                            .map(RegistryResponse::Holder);
+                            .map(|proc_id| {
+                                RegistryResponse::Holder(key_id, proc_id)
+                            });
                         match err {
-                            Err(AccessManagerError::RequestAccess(_, _)) => {
-                                Ok(RegistryResponse::Wait)
+                            Err(AccessManagerError::RequestAccess(
+                                proc_id,
+                                key_id,
+                            )) => {
+                                warn!("Read access currently impossible for proc {}, key {}", proc_id, key_id);
+                                Ok(RegistryResponse::Wait(key_id))
                             }
                             _ => err,
                         }
@@ -171,10 +177,11 @@ impl RegistryServer {
                         let err = self
                             .access_manager
                             .write(proc_id, key_id)
-                            .map(|_| RegistryResponse::Success);
+                            .map(|_| RegistryResponse::Success(key_id));
                         match err {
                             Err(AccessManagerError::RequestAccess(_, _)) => {
-                                Ok(RegistryResponse::Wait)
+                                warn!("Write access currently impossible for proc {}, key {}", proc_id, key_id);
+                                Ok(RegistryResponse::Wait(key_id))
                             }
                             _ => err,
                         }
@@ -182,7 +189,7 @@ impl RegistryServer {
                     RequestType::Release => self
                         .access_manager
                         .release(proc_id, key_id)
-                        .map(|_| RegistryResponse::Success),
+                        .map(|_| RegistryResponse::Success(key_id)),
                 };
                 response.map_err(RegistryServerError::AccessManager)
             }
@@ -195,7 +202,10 @@ impl RegistryServer {
         token: Token,
         data: &[u8],
     ) -> Result<(), RegistryServerError> {
-        let message: Message = serde_json::from_slice(data)?;
+        let message: Message =
+            serde_json::from_slice(data).inspect_err(|_| {
+                error!("data: {:?}", std::str::from_utf8(data).unwrap());
+            })?;
         let response = self.handle_message(message)?;
         self.handle_response(token, response)?;
 
@@ -204,13 +214,25 @@ impl RegistryServer {
             self.access_manager.access_granted_rx.try_iter().collect();
         for req in requests {
             info!("Handling pending request: {:?}", req);
-            let (proc_id, _key_id, req_type) = req;
+            let (proc_id, key_id, req_type, holder_id) = req;
             let response = match req_type {
-                RequestType::Read => RegistryResponse::Success,
-                RequestType::Write => RegistryResponse::Success,
+                RequestType::Read => {
+                    RegistryResponse::Holder(key_id, holder_id)
+                }
+                RequestType::Write => RegistryResponse::Success(key_id),
                 _ => unreachable!(),
             };
-            self.handle_response(Token(proc_id), response)?;
+
+            match self.handle_response(Token(proc_id), response) {
+                Err(RegistryServerError::InvalidToken(token)) => {
+                    error!(
+                        "Invalid token {:?} while handling proc {:?}",
+                        token.0, proc_id
+                    );
+                }
+                Err(err) => return Err(err),
+                _ => {}
+            };
         }
 
         Ok(())
@@ -224,7 +246,9 @@ impl RegistryServer {
         let Some(stream) = self.token_stream_map.get_mut(&token) else {
             return Err(RegistryServerError::InvalidToken(token));
         };
-        let data = serde_json::to_vec(&registry_response!(response))?;
+        let mut data = serde_json::to_vec(&registry_response!(response))?;
+        // handle issue with subsequent writing of responses
+        data.extend_from_slice(b"\n");
         stream.write_all(&data)?;
         Ok(())
     }
