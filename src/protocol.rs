@@ -14,6 +14,18 @@ pub enum Message {
     Data(DataMessage),
 }
 
+impl Message {
+    pub fn to_vec(&self) -> Result<Vec<u8>, serde_json::Error> {
+        let mut data = serde_json::to_vec(self)?;
+        data.extend_from_slice(b"\n");
+        Ok(data)
+    }
+
+    pub fn from_slice(data: &[u8]) -> Result<Self, serde_json::Error> {
+        serde_json::from_slice(data)
+    }
+}
+
 /// Represents different kind of responses from the registry.
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RegistryResponse {

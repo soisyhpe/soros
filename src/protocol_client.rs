@@ -1,5 +1,5 @@
 use log::{error, info, warn};
-use std::io::prelude::*;
+use std::io::{prelude::*, BufReader};
 use std::net::TcpStream;
 use thiserror::Error;
 
@@ -35,12 +35,11 @@ pub struct ProtocolClient {
 
 impl ProtocolClient {
     pub fn new(hostname: &str, port: u32) -> Result<Self, ProtocolClientError> {
-        info!("Connecting to registry on {}:{}", hostname, port);
+        info!("Trying to connect to the registry: {}:{}", hostname, port);
         let mut registry_stream =
             TcpStream::connect(format!("{}:{}", hostname, port))?;
         let proc_id =
             ProtocolClient::registry_handle_connection(&mut registry_stream)?;
-        info!("Given proc id is {}", proc_id);
 
         Ok(Self {
             proc_id,
@@ -53,13 +52,15 @@ impl ProtocolClient {
     fn receive_message(
         stream: &mut TcpStream,
     ) -> Result<Message, ProtocolClientError> {
-        let mut buffer = [0; 256];
-        let size = stream.read(&mut buffer)?;
+        let mut reader = BufReader::new(stream);
+        let mut buffer = Vec::new();
+        reader.read_until(b'\n', &mut buffer)?;
+
         let message =
-            serde_json::from_slice(&buffer[..size]).inspect_err(|_| {
+            Message::from_slice(buffer.as_slice()).inspect_err(|_| {
                 error!(
                     "data: {:?}",
-                    std::str::from_utf8(&buffer[..size]).unwrap()
+                    std::str::from_utf8(buffer.as_slice()).unwrap()
                 );
             })?;
         Ok(message)
@@ -70,7 +71,7 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
-        info!("Registry create: {:?}", key_id);
+        info!("{} -> Registry create: {}", self.proc_id, key_id);
         self.registry_send_request(key_id, RequestType::Create)?;
         self.registry_expect_success(key_id)
     }
@@ -80,7 +81,7 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
-        info!("Registry delete: {:?}", key_id);
+        info!("{} -> Registry delete: {}", self.proc_id, key_id);
         self.registry_send_request(key_id, RequestType::Delete)?;
         self.registry_expect_success(key_id)
     }
@@ -147,7 +148,7 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<ProcId, ProtocolClientError> {
-        info!("Registry read: {:?}", key_id);
+        info!("{} -> Registry read: {:?}", self.proc_id, key_id);
         self.registry_send_request(key_id, RequestType::Read)?;
         self.registry_expect_holder(key_id)
     }
@@ -157,7 +158,7 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<ProcId, ProtocolClientError> {
-        info!("Registry read sync: {:?}", key_id);
+        info!("{} -> Registry read sync: {}", self.proc_id, key_id);
         match self.registry_read(key_id) {
             Err(ProtocolClientError::WaitError(key_id)) => {
                 warn!("Waiting for read of {}...", key_id);
@@ -172,7 +173,7 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
-        info!("Registry release: {:?}", key_id);
+        info!("{} -> Registry release: {}", self.proc_id, key_id);
         self.registry_send_request(key_id, RequestType::Release)?;
         self.registry_expect_success(key_id)
     }
@@ -183,8 +184,7 @@ impl ProtocolClient {
         request_type: RequestType,
     ) -> Result<(), ProtocolClientError> {
         let message = registry_request!(self.proc_id, key_id, request_type);
-        let data =
-            serde_json::to_vec(&message).map_err(ProtocolClientError::from)?;
+        let data = message.to_vec().map_err(ProtocolClientError::from)?;
         self.registry_stream.write_all(&data)?;
         Ok(())
     }
@@ -194,7 +194,7 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
-        info!("Registry write: {:?}", key_id);
+        info!("{} -> Registry write: {}", self.proc_id, key_id);
         self.registry_send_request(key_id, RequestType::Write)?;
         self.registry_expect_success(key_id)
     }
@@ -204,7 +204,7 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
-        info!("Registry write sync: {:?}", key_id);
+        info!("{} -> Registry write sync: {}", self.proc_id, key_id);
         match self.registry_write(key_id) {
             Err(ProtocolClientError::WaitError(key_id)) => {
                 warn!("Waiting for write...");
@@ -213,4 +213,13 @@ impl ProtocolClient {
             res => res,
         }
     }
+}
+
+#[macro_export]
+macro_rules! handle_wait {
+    ($res: expr, $logic: expr) => {
+        if let Err(ProtocolClientError::WaitError(data_key)) = $res {
+            $logic
+        }
+    };
 }

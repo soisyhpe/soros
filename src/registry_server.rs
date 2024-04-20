@@ -5,7 +5,7 @@ use crate::{
     },
     registry_connection, registry_response,
 };
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use mio::{
     net::{TcpListener, TcpStream},
     Events, Interest, Poll, Token,
@@ -71,12 +71,26 @@ impl RegistryServer {
             self.poll.poll(&mut events, None)?;
             for event in events.iter() {
                 match event.token() {
-                    LISTENER => {
-                        let (stream, _addr) = listener.accept()?;
-                        self.handle_connection(stream)?;
-                    }
+                    LISTENER => loop {
+                        match listener.accept() {
+                            Ok((stream, _addr)) => {
+                                self.handle_connection(stream)?
+                            }
+                            Err(ref e)
+                                if e.kind() == io::ErrorKind::WouldBlock =>
+                            {
+                                break
+                            }
+                            Err(e) => panic!("Unexpected error: {}", e),
+                        }
+                    },
                     token if event.is_readable() => {
-                        self.handle_data(token)?;
+                        let _ = self.handle_data(token).inspect_err(|err| {
+                            error!(
+                                "Failed to handle data for token: {}, got: {}",
+                                token.0, err
+                            );
+                        });
                     }
                     _ => {}
                 }
@@ -97,7 +111,7 @@ impl RegistryServer {
         )?;
 
         info!("handling connection from {:?}", stream.peer_addr());
-        let data = serde_json::to_vec(&registry_connection!(token.0))?;
+        let data = registry_connection!(token.0).to_vec()?;
         stream.write_all(&data)?;
         self.token_stream_map.insert(token, stream);
 
@@ -139,7 +153,7 @@ impl RegistryServer {
         &mut self,
         message: Message,
     ) -> Result<RegistryResponse, RegistryServerError> {
-        info!("handling message: {:?}", message);
+        debug!("handling message: {:?}", message);
         match message {
             Message::Registry(RegistryMessage::Request {
                 request_type,
@@ -202,10 +216,9 @@ impl RegistryServer {
         token: Token,
         data: &[u8],
     ) -> Result<(), RegistryServerError> {
-        let message: Message =
-            serde_json::from_slice(data).inspect_err(|_| {
-                error!("data: {:?}", std::str::from_utf8(data).unwrap());
-            })?;
+        let message = Message::from_slice(data).inspect_err(|_| {
+            error!("data: {:?}", std::str::from_utf8(data).unwrap());
+        })?;
         let response = self.handle_message(message)?;
         self.handle_response(token, response)?;
 
@@ -213,7 +226,10 @@ impl RegistryServer {
         let requests: Vec<AccessGranted> =
             self.access_manager.access_granted_rx.try_iter().collect();
         for req in requests {
-            info!("Handling pending request: {:?}", req);
+            info!(
+                "Access granted for proc: {}, key: {}, request type: {:?}, holder: {}",
+                req.0, req.1, req.2, req.3
+            );
             let (proc_id, key_id, req_type, holder_id) = req;
             let response = match req_type {
                 RequestType::Read => {
@@ -246,9 +262,7 @@ impl RegistryServer {
         let Some(stream) = self.token_stream_map.get_mut(&token) else {
             return Err(RegistryServerError::InvalidToken(token));
         };
-        let mut data = serde_json::to_vec(&registry_response!(response))?;
-        // handle issue with subsequent writing of responses
-        data.extend_from_slice(b"\n");
+        let data = registry_response!(response).to_vec()?;
         stream.write_all(&data)?;
         Ok(())
     }
