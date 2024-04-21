@@ -449,7 +449,7 @@ mod tests {
         );
 
         manager.release(a, x)?;
-        assert_grant!(manager, c, x, RequestType::Write, 0);
+        assert_grant!(manager, c, x, RequestType::Write, a);
         assert_eq!(
             manager.get_key_state(x)?.pending_request,
             vec![(b, RequestType::Read)]
@@ -462,8 +462,8 @@ mod tests {
         );
 
         manager.release(c, 0)?;
-        assert_grant!(manager, b, x, RequestType::Read);
-        assert_grant!(manager, d, x, RequestType::Read);
+        assert_grant!(manager, b, x, RequestType::Read, a);
+        assert_grant!(manager, d, x, RequestType::Read, a);
 
         assert!(manager.get_key_state(x)?.pending_request.is_empty());
         assert_eq!(manager.get_key_state(x)?.readers, HashSet::from([b, d]));

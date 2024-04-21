@@ -1,4 +1,4 @@
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use std::{io::prelude::*, net::TcpStream};
 use thiserror::Error;
 
@@ -76,6 +76,11 @@ impl ProtocolClient {
         let data = &curr_data[..index].to_vec();
         curr_data.drain(..index + 1);
 
+        debug!(
+            "Parsed data: {:?}",
+            std::str::from_utf8(data.as_slice()).unwrap()
+        );
+
         let message =
             Message::from_slice(data.as_slice()).inspect_err(|_| {
                 error!(
@@ -89,17 +94,21 @@ impl ProtocolClient {
     /// Wait until read request is granted.
     pub fn registry_await_read(
         &mut self,
-        key_id: KeyId,
-    ) -> Result<ProcId, ProtocolClientError> {
-        self.registry_expect_holder(key_id)
+    ) -> Result<(KeyId, ProcId), ProtocolClientError> {
+        match self.registry_handle_response()? {
+            RegistryResponse::Holder(key_id, proc_id) => Ok((key_id, proc_id)),
+            _ => Err(ProtocolClientError::UnexpectedResponse),
+        }
     }
 
     /// Wait until write request is granted.
     pub fn registry_await_write(
         &mut self,
-        key_id: KeyId,
-    ) -> Result<(), ProtocolClientError> {
-        self.registry_expect_success(key_id)
+    ) -> Result<KeyId, ProtocolClientError> {
+        match self.registry_handle_response()? {
+            RegistryResponse::Success(key_id) => Ok(key_id),
+            _ => Err(ProtocolClientError::UnexpectedResponse),
+        }
     }
 
     /// Send a create request to the registry.
@@ -120,21 +129,6 @@ impl ProtocolClient {
         info!("{} -> Registry delete: {}", self.proc_id, key_id);
         self.registry_send_request(key_id, RequestType::Delete)?;
         self.registry_expect_success(key_id)
-    }
-
-    /// Expect a response from the registry with the holder of the specified key.
-    fn registry_expect_holder(
-        &mut self,
-        key_id: KeyId,
-    ) -> Result<ProcId, ProtocolClientError> {
-        match self.registry_handle_response()? {
-            RegistryResponse::Holder(resp_key_id, proc_id)
-                if key_id == resp_key_id =>
-            {
-                Ok(proc_id)
-            }
-            _ => Err(ProtocolClientError::UnexpectedResponse),
-        }
     }
 
     /// Expect a success response from the registry for the specified key.
@@ -187,10 +181,9 @@ impl ProtocolClient {
     pub fn registry_read(
         &mut self,
         key_id: KeyId,
-    ) -> Result<ProcId, ProtocolClientError> {
+    ) -> Result<(), ProtocolClientError> {
         info!("{} -> Registry read: {:?}", self.proc_id, key_id);
-        self.registry_send_request(key_id, RequestType::Read)?;
-        self.registry_expect_holder(key_id)
+        self.registry_send_request(key_id, RequestType::Read)
     }
 
     /// Send a read request to the registry, wait until it's granted.
@@ -198,14 +191,19 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<ProcId, ProtocolClientError> {
-        info!("{} -> Registry read sync: {}", self.proc_id, key_id);
-        match self.registry_read(key_id) {
+        self.registry_read(key_id)?;
+        match self.registry_await_read() {
             Err(ProtocolClientError::WaitError(key_id)) => {
-                warn!("Waiting for read of {}...", key_id);
-                self.registry_expect_holder(key_id)
+                warn!("Awaiting read of {}...", key_id);
+                let res = self.registry_await_read()?;
+                if (self.proc_id, key_id) != res {
+                    return Err(ProtocolClientError::UnexpectedResponse);
+                }
+                Ok(res)
             }
             res => res,
         }
+        .map(|(proc_id, _)| proc_id)
     }
 
     /// Send a release request to the registry.
@@ -244,8 +242,7 @@ impl ProtocolClient {
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
         info!("{} -> Registry write: {}", self.proc_id, key_id);
-        self.registry_send_request(key_id, RequestType::Write)?;
-        self.registry_expect_success(key_id)
+        self.registry_send_request(key_id, RequestType::Write)
     }
 
     /// Send a write request to the registry, wait until it's granted.
@@ -254,20 +251,26 @@ impl ProtocolClient {
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
         info!("{} -> Registry write sync: {}", self.proc_id, key_id);
-        match self.registry_write(key_id) {
+        self.registry_write(key_id)?;
+        match self.registry_await_write() {
             Err(ProtocolClientError::WaitError(key_id)) => {
-                warn!("Waiting for write...");
-                self.registry_expect_success(key_id)
+                warn!("Awaiting write of {}...", key_id);
+                let res_key_id = self.registry_await_write()?;
+                if key_id != res_key_id {
+                    return Err(ProtocolClientError::UnexpectedResponse);
+                }
+                Ok(res_key_id)
             }
             res => res,
         }
+        .map(|_| ())
     }
 }
 
 #[macro_export]
-macro_rules! handle_wait {
-    ($res: expr, $logic: expr) => {
-        if let Err(ProtocolClientError::WaitError(data_key)) = $res {
+macro_rules! handle_wait_error {
+    ($res: expr, $logic: block) => {
+        if let Err(ProtocolClientError::WaitError(_)) = $res {
             $logic
         }
     };

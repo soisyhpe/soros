@@ -4,7 +4,7 @@ use std::{
 };
 
 use soros::{
-    handle_wait,
+    handle_wait_error,
     protocol_client::{ProtocolClient, ProtocolClientError},
     registry_server::{RegistryServer, RegistryServerError},
 };
@@ -41,10 +41,13 @@ fn read_client(
 
     for _ in 0..nb_requests {
         let start_time = Instant::now();
-        handle_wait!(protocol_client.registry_read(1), {
+
+        protocol_client.registry_read(1)?;
+        handle_wait_error!(protocol_client.registry_await_read(), {
             nb_blocks += 1;
-            protocol_client.registry_await_read(1)?;
+            protocol_client.registry_await_read()?;
         });
+
         protocol_client.registry_release(1)?;
         mean_access_time += start_time.elapsed();
     }
@@ -62,10 +65,13 @@ fn write_client(
 
     for _ in 0..nb_requests {
         let start_time = Instant::now();
-        handle_wait!(protocol_client.registry_write(1), {
+
+        protocol_client.registry_write(1)?;
+        handle_wait_error!(protocol_client.registry_await_write(), {
             nb_blocks += 1;
-            protocol_client.registry_await_write(1)?;
+            protocol_client.registry_await_write()?;
         });
+
         protocol_client.registry_release(1)?;
         mean_access_time += start_time.elapsed();
     }
