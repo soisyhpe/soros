@@ -6,7 +6,7 @@ use crate::{
     protocol::{
         KeyId, Message, ProcId, RegistryMessage, RegistryResponse, RequestType,
     },
-    registry_request,
+    registry_request, registry_stop,
 };
 
 #[non_exhaustive]
@@ -84,6 +84,15 @@ impl ProtocolClient {
                 );
             })?;
         Ok(message)
+    }
+
+    /// Send a stop request to the registry, for testing purpose.
+    pub fn registry_stop(&mut self) -> Result<(), ProtocolClientError> {
+        info!("{} -> Registry stop", self.proc_id);
+        let message = registry_stop!();
+        let data = message.to_vec().map_err(ProtocolClientError::from)?;
+        self.registry_stream.write_all(&data)?;
+        Ok(())
     }
 
     /// Send a create request to the registry.

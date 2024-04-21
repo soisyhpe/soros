@@ -30,6 +30,8 @@ pub enum RegistryServerError {
     AccessManager(#[from] AccessManagerError),
     #[error("Invalid {:?}", .0)]
     InvalidToken(Token),
+    #[error("Stop requested")]
+    StopRequest,
 }
 
 #[derive(Debug)]
@@ -85,12 +87,17 @@ impl RegistryServer {
                         }
                     },
                     token if event.is_readable() => {
-                        let _ = self.handle_data(token).inspect_err(|err| {
-                            error!(
-                                "Failed to handle data for token: {}, got: {}",
-                                token.0, err
-                            );
-                        });
+                        let res = self.handle_data(token);
+                        match res {
+                            Err(RegistryServerError::StopRequest) => {
+                                info!("Gracefully shutdown");
+                                return Ok(());
+                            }
+                            Err(err) => {
+                                error!("Failed to handle data for token: {}, got: {}", token.0, err)
+                            }
+                            _ => {}
+                        }
                     }
                     _ => {}
                 }
@@ -133,10 +140,12 @@ impl RegistryServer {
                 Err(RegistryServerError::IoError(e))
             }
             Ok(size) => {
-                let err = self.handle_request(token, &buffer[..size]);
-                if let Err(err) = err {
-                    self.handle_error(token, err)?;
-                };
+                let res = self.handle_request(token, &buffer[..size]);
+                match res {
+                    Err(RegistryServerError::StopRequest) => return res,
+                    Err(err) => self.handle_error(token, err)?,
+                    _ => {}
+                }
                 Ok(())
             }
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(()),
@@ -159,6 +168,9 @@ impl RegistryServer {
     ) -> Result<RegistryResponse, RegistryServerError> {
         debug!("handling message: {:?}", message);
         match message {
+            Message::Registry(RegistryMessage::StopRequest) => {
+                Err(RegistryServerError::StopRequest)
+            }
             Message::Registry(RegistryMessage::Request {
                 request_type,
                 proc_id,

@@ -59,6 +59,8 @@ pub enum RegistryMessage {
     },
     /// Response containing registry data.
     Response(RegistryResponse),
+    /// Used for gracefully shutdown in the tests
+    StopRequest,
 }
 
 /// Represent a message related to the peer-to-peer data exchange protocol
@@ -92,5 +94,12 @@ macro_rules! registry_connection {
 macro_rules! registry_response {
     ($resp: expr) => {
         Message::Registry(RegistryMessage::Response($resp))
+    };
+}
+
+#[macro_export]
+macro_rules! registry_stop {
+    () => {
+        Message::Registry(RegistryMessage::StopRequest)
     };
 }
