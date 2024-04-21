@@ -165,6 +165,7 @@ impl RegistryServer {
     fn handle_message(
         &mut self,
         message: Message,
+        proc_id: ProcId,
     ) -> Result<RegistryResponse, RegistryServerError> {
         debug!("handling message: {:?}", message);
         match message {
@@ -173,7 +174,6 @@ impl RegistryServer {
             }
             Message::Registry(RegistryMessage::Request {
                 request_type,
-                proc_id,
                 key_id,
             }) => {
                 let response = match request_type {
@@ -235,7 +235,7 @@ impl RegistryServer {
         let message = Message::from_slice(data).inspect_err(|_| {
             error!("data: {:?}", std::str::from_utf8(data).unwrap());
         })?;
-        let response = self.handle_message(message)?;
+        let response = self.handle_message(message, token.0)?;
         self.handle_response(token, response)?;
 
         // check if we need to grant access to pending request

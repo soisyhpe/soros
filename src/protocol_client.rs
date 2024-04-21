@@ -221,7 +221,7 @@ impl ProtocolClient {
         key_id: KeyId,
         request_type: RequestType,
     ) -> Result<(), ProtocolClientError> {
-        let message = registry_request!(self.proc_id, key_id, request_type);
+        let message = registry_request!(key_id, request_type);
         let data = message.to_vec().map_err(ProtocolClientError::from)?;
         self.registry_stream.write_all(&data)?;
         Ok(())

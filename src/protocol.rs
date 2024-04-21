@@ -54,7 +54,6 @@ pub enum RegistryMessage {
     /// Request for accessing registry data.
     Request {
         request_type: RequestType,
-        proc_id: ProcId,
         key_id: KeyId,
     },
     /// Response containing registry data.
@@ -74,9 +73,8 @@ pub enum DataMessage {
 
 #[macro_export]
 macro_rules! registry_request {
-    ($proc_id: expr, $key_id: expr, $request_type: ident) => {
+    ($key_id: expr, $request_type: ident) => {
         Message::Registry(RegistryMessage::Request {
-            proc_id: $proc_id,
             key_id: $key_id,
             request_type: $request_type,
         })
