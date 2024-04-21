@@ -1,6 +1,5 @@
 use log::{error, info, warn};
-use std::io::{prelude::*, BufReader};
-use std::net::TcpStream;
+use std::{io::prelude::*, net::TcpStream};
 use thiserror::Error;
 
 use crate::{
@@ -15,13 +14,13 @@ use crate::{
 pub enum ProtocolClientError {
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
-    #[error("Serialization error: {0}")]
+    #[error("serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
-    #[error("Registry error: {0}")]
+    #[error("registry error -> {0}")]
     RegistryError(String),
-    #[error("Unexpected response")]
+    #[error("unexpected response")]
     UnexpectedResponse,
-    #[error("Wait error: {0}")]
+    #[error("wait error: {0}")]
     WaitError(KeyId),
 }
 
@@ -31,6 +30,7 @@ pub struct ProtocolClient {
     pub port: u32,
     pub proc_id: ProcId,
     registry_stream: TcpStream,
+    curr_data: Vec<u8>,
 }
 
 impl ProtocolClient {
@@ -38,10 +38,15 @@ impl ProtocolClient {
         info!("Trying to connect to the registry: {}:{}", hostname, port);
         let mut registry_stream =
             TcpStream::connect(format!("{}:{}", hostname, port))?;
-        let proc_id =
-            ProtocolClient::registry_handle_connection(&mut registry_stream)?;
+        let mut curr_data = Vec::new();
+
+        let proc_id = ProtocolClient::registry_handle_connection(
+            &mut registry_stream,
+            &mut curr_data,
+        )?;
 
         Ok(Self {
+            curr_data,
             proc_id,
             hostname: hostname.to_string(),
             port,
@@ -51,16 +56,31 @@ impl ProtocolClient {
 
     fn receive_message(
         stream: &mut TcpStream,
+        curr_data: &mut Vec<u8>,
     ) -> Result<Message, ProtocolClientError> {
-        let mut reader = BufReader::new(stream);
-        let mut buffer = Vec::new();
-        reader.read_until(b'\n', &mut buffer)?;
+        loop {
+            // While testing in local, the stream reading sometimes block.
+            // Lowering the buffer size seems to  fix the issue...
+            let mut buffer = [0; 32];
+            let len = stream.read(&mut buffer)?;
+            curr_data.extend_from_slice(&buffer[..len]);
+            if buffer.contains(&b'\n') {
+                break;
+            }
+        }
+
+        let index = curr_data
+            .iter()
+            .position(|&c| c == b'\n')
+            .ok_or_else(|| ProtocolClientError::UnexpectedResponse)?;
+        let data = &curr_data[..index].to_vec();
+        curr_data.drain(..index + 1);
 
         let message =
-            Message::from_slice(buffer.as_slice()).inspect_err(|_| {
+            Message::from_slice(data.as_slice()).inspect_err(|_| {
                 error!(
                     "data: {:?}",
-                    std::str::from_utf8(buffer.as_slice()).unwrap()
+                    std::str::from_utf8(data.as_slice()).unwrap()
                 );
             })?;
         Ok(message)
@@ -117,8 +137,9 @@ impl ProtocolClient {
     /// Handle the initial connection to the registry, retrieving the process id.
     fn registry_handle_connection(
         registry_stream: &mut TcpStream,
+        curr_data: &mut Vec<u8>,
     ) -> Result<ProcId, ProtocolClientError> {
-        match ProtocolClient::receive_message(registry_stream)? {
+        match ProtocolClient::receive_message(registry_stream, curr_data)? {
             Message::Registry(RegistryMessage::Connection(proc_id)) => {
                 Ok(proc_id)
             }
@@ -129,7 +150,10 @@ impl ProtocolClient {
     fn registry_handle_response(
         &mut self,
     ) -> Result<RegistryResponse, ProtocolClientError> {
-        match ProtocolClient::receive_message(&mut self.registry_stream)? {
+        match ProtocolClient::receive_message(
+            &mut self.registry_stream,
+            &mut self.curr_data,
+        )? {
             Message::Registry(RegistryMessage::Response(resp)) => match resp {
                 RegistryResponse::Error(err) => {
                     Err(ProtocolClientError::RegistryError(err))

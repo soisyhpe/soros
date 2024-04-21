@@ -22,11 +22,11 @@ use thiserror::Error;
 pub enum RegistryServerError {
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
-    #[error("Serialization error: {0}")]
+    #[error("serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
-    #[error("Unexpected request")]
+    #[error("unexpected request")]
     UnexpectedRequest,
-    #[error("Access manager error: {0}")]
+    #[error("access manager error: {0}")]
     AccessManager(#[from] AccessManagerError),
     #[error("Invalid {:?}", .0)]
     InvalidToken(Token),
@@ -128,6 +128,10 @@ impl RegistryServer {
                 self.token_stream_map.remove(&token);
                 Ok(())
             }
+            Err(e) if e.kind() == io::ErrorKind::ConnectionReset => {
+                self.token_stream_map.remove(&token);
+                Err(RegistryServerError::IoError(e))
+            }
             Ok(size) => {
                 let err = self.handle_request(token, &buffer[..size]);
                 if let Err(err) = err {
@@ -136,7 +140,7 @@ impl RegistryServer {
                 Ok(())
             }
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(()),
-            Err(e) => panic!("Unexpected error: {}", e),
+            Err(e) => Err(RegistryServerError::IoError(e)),
         }
     }
 
@@ -225,6 +229,7 @@ impl RegistryServer {
         // check if we need to grant access to pending request
         let requests: Vec<AccessGranted> =
             self.access_manager.access_granted_rx.try_iter().collect();
+        debug!("Handling pending requests: {:?}", requests);
         for req in requests {
             info!(
                 "Access granted for proc: {}, key: {}, request type: {:?}, holder: {}",
