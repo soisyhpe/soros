@@ -86,13 +86,20 @@ impl ProtocolClient {
         Ok(message)
     }
 
-    /// Send a stop request to the registry, for testing purpose.
-    pub fn registry_stop(&mut self) -> Result<(), ProtocolClientError> {
-        info!("{} -> Registry stop", self.proc_id);
-        let message = registry_stop!();
-        let data = message.to_vec().map_err(ProtocolClientError::from)?;
-        self.registry_stream.write_all(&data)?;
-        Ok(())
+    /// Wait until read request is granted.
+    pub fn registry_await_read(
+        &mut self,
+        key_id: KeyId,
+    ) -> Result<ProcId, ProtocolClientError> {
+        self.registry_expect_holder(key_id)
+    }
+
+    /// Wait until write request is granted.
+    pub fn registry_await_write(
+        &mut self,
+        key_id: KeyId,
+    ) -> Result<(), ProtocolClientError> {
+        self.registry_expect_success(key_id)
     }
 
     /// Send a create request to the registry.
@@ -116,7 +123,7 @@ impl ProtocolClient {
     }
 
     /// Expect a response from the registry with the holder of the specified key.
-    pub fn registry_expect_holder(
+    fn registry_expect_holder(
         &mut self,
         key_id: KeyId,
     ) -> Result<ProcId, ProtocolClientError> {
@@ -131,7 +138,7 @@ impl ProtocolClient {
     }
 
     /// Expect a success response from the registry for the specified key.
-    pub fn registry_expect_success(
+    fn registry_expect_success(
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
@@ -217,6 +224,15 @@ impl ProtocolClient {
         request_type: RequestType,
     ) -> Result<(), ProtocolClientError> {
         let message = registry_request!(self.proc_id, key_id, request_type);
+        let data = message.to_vec().map_err(ProtocolClientError::from)?;
+        self.registry_stream.write_all(&data)?;
+        Ok(())
+    }
+
+    /// Send a stop request to the registry, for testing purpose.
+    pub fn registry_stop(&mut self) -> Result<(), ProtocolClientError> {
+        info!("{} -> Registry stop", self.proc_id);
+        let message = registry_stop!();
         let data = message.to_vec().map_err(ProtocolClientError::from)?;
         self.registry_stream.write_all(&data)?;
         Ok(())
