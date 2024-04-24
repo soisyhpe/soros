@@ -1,4 +1,4 @@
-use std::thread;
+use std::{env, thread};
 
 use env_logger::Env;
 use log::{error, info, warn};
@@ -7,8 +7,20 @@ use soros::{
     protocol_client::{ProtocolClient, ProtocolClientError},
 };
 
+fn create_protocol_client() -> Result<ProtocolClient, ProtocolClientError> {
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 3 {
+        panic!("Usage: {} <hostname> <port>", args[0]);
+    }
+
+    let hostname: String = args[1].parse().expect("Invalid hostname");
+    let port: u16 = args[2].parse().expect("Invalid port number");
+
+    ProtocolClient::new(&hostname, port)
+}
+
 fn basic_usage() -> Result<(), ProtocolClientError> {
-    let mut protocol_client = ProtocolClient::new("localhost", 8888)?;
+    let mut protocol_client = create_protocol_client()?;
 
     let mut _data = "my_data".to_string();
     let data_key = 1;
@@ -34,7 +46,7 @@ fn basic_usage() -> Result<(), ProtocolClientError> {
 }
 
 fn advanced_usage() -> Result<(), ProtocolClientError> {
-    let mut protocol_client = ProtocolClient::new("localhost", 8888)?;
+    let mut protocol_client = create_protocol_client()?;
     let data_key = 2;
 
     let _ = protocol_client.registry_create(data_key);

@@ -11,26 +11,13 @@ use soros::{
 };
 
 fn server() -> Result<(), RegistryServerError> {
-    let mut registry_server = RegistryServer::new("localhost", 8888)?;
+    let mut registry_server = RegistryServer::new(8888)?;
     registry_server.bind()?;
     Ok(())
 }
 
 fn create_client() -> Result<ProtocolClient, ProtocolClientError> {
     ProtocolClient::new("localhost", 8888)
-}
-
-fn init() -> Result<(), ProtocolClientError> {
-    let mut protocol_client = create_client()?;
-    protocol_client.registry_create(1)?;
-    Ok(())
-}
-
-fn cleanup() -> Result<(), ProtocolClientError> {
-    let mut protocol_client = create_client()?;
-    protocol_client.registry_delete(1)?;
-    protocol_client.registry_stop()?;
-    Ok(())
 }
 
 fn read_client(
@@ -202,12 +189,14 @@ fn bench_readers_writers(
     .unwrap();
 }
 
-fn main() {
+fn main() -> Result<(), ProtocolClientError> {
     env_logger::init();
 
     let server_thread = thread::spawn(server);
 
-    thread::spawn(init).join().unwrap().expect("init failed");
+    // init
+    let mut protocol_client = create_client()?;
+    protocol_client.registry_create(1)?;
 
     fs::create_dir_all("generated").unwrap();
     let file = File::create("generated/registry-bench.csv").unwrap();
@@ -222,10 +211,11 @@ fn main() {
     bench_readers_writers(20, 80, nb_requests, &mut wtr);
     bench_readers_writers(50, 50, nb_requests, &mut wtr);
 
-    thread::spawn(cleanup)
-        .join()
-        .unwrap()
-        .expect("cleanup failed");
+    // cleanup
+    protocol_client.registry_delete(1)?;
+    protocol_client.registry_stop()?;
 
     server_thread.join().unwrap().expect("server failed");
+
+    Ok(())
 }

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 
 /// Unique identifier for a process.
 pub type ProcId = usize;
@@ -33,7 +34,7 @@ pub enum RegistryResponse {
     /// The request cannot be fullfilled yet
     Wait(KeyId),
     /// Return a process id using the data, can be used for the peer-to-peer protocol.
-    Holder(KeyId, ProcId),
+    Holder(KeyId, SocketAddr),
     Error(String),
 }
 

@@ -13,7 +13,7 @@ use mio::{
 use std::{
     collections::HashMap,
     io::{self, Read, Write},
-    net::ToSocketAddrs,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 use thiserror::Error;
 
@@ -30,34 +30,26 @@ pub enum RegistryServerError {
     AccessManager(#[from] AccessManagerError),
     #[error("Invalid {:?}", .0)]
     InvalidToken(Token),
+    #[error("Unknown data holder {:?}", .0)]
+    UnknownHolder(Token),
     #[error("Stop requested")]
     StopRequest,
 }
 
 #[derive(Debug)]
 pub struct RegistryServer {
-    pub hostname: String,
-    pub port: u32,
+    addr: SocketAddr,
     access_manager: AccessManager,
     poll: Poll,
     token_stream_map: HashMap<Token, TcpStream>,
+    token_addr_map: HashMap<Token, SocketAddr>,
     id_counter: ProcId,
 }
 
 impl RegistryServer {
     pub fn bind(&mut self) -> Result<(), RegistryServerError> {
-        info!(
-            "Starting registry server on {}:{}",
-            self.hostname, self.port
-        );
-        let addr_string = format!("{}:{}", self.hostname, self.port);
-        let addr = addr_string.to_socket_addrs()?.next().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::AddrNotAvailable,
-                format!("Could not find address {}", addr_string),
-            )
-        })?;
-        let mut listener = TcpListener::bind(addr)?;
+        info!("Starting registry server on {:?}", self.addr);
+        let mut listener = TcpListener::bind(self.addr)?;
 
         // mio poll, use epoll / kqueue under the hood
         let mut events = Events::with_capacity(128);
@@ -75,8 +67,8 @@ impl RegistryServer {
                 match event.token() {
                     LISTENER => loop {
                         match listener.accept() {
-                            Ok((stream, _addr)) => {
-                                self.handle_connection(stream)?
+                            Ok((stream, addr)) => {
+                                self.handle_connection(stream, addr)?
                             }
                             Err(ref e)
                                 if e.kind() == io::ErrorKind::WouldBlock =>
@@ -108,6 +100,7 @@ impl RegistryServer {
     fn handle_connection(
         &mut self,
         mut stream: TcpStream,
+        addr: SocketAddr,
     ) -> Result<(), RegistryServerError> {
         self.id_counter += 1;
         let token = Token(self.id_counter);
@@ -120,7 +113,9 @@ impl RegistryServer {
         info!("handling connection from {:?}", stream.peer_addr());
         let data = registry_connection!(token.0).to_vec()?;
         stream.write_all(&data)?;
+
         self.token_stream_map.insert(token, stream);
+        self.token_addr_map.insert(token, addr);
 
         Ok(())
     }
@@ -132,11 +127,11 @@ impl RegistryServer {
 
         match read {
             Ok(0) => {
-                self.token_stream_map.remove(&token);
+                self.remove_client(token);
                 Ok(())
             }
             Err(e) if e.kind() == io::ErrorKind::ConnectionReset => {
-                self.token_stream_map.remove(&token);
+                self.remove_client(token);
                 Err(RegistryServerError::IoError(e))
             }
             Ok(size) => {
@@ -186,13 +181,11 @@ impl RegistryServer {
                         .delete(key_id)
                         .map(|_| RegistryResponse::Success(key_id)),
                     RequestType::Read => {
-                        let err = self
-                            .access_manager
-                            .read(proc_id, key_id)
-                            .map(|proc_id| {
-                                RegistryResponse::Holder(key_id, proc_id)
-                            });
-                        match err {
+                        match self.access_manager.read(proc_id, key_id) {
+                            Ok(holder_id) => {
+                                let addr = self.proc_id_to_addr(holder_id)?;
+                                Ok(RegistryResponse::Holder(key_id, addr))
+                            }
                             Err(AccessManagerError::RequestAccess(
                                 proc_id,
                                 key_id,
@@ -200,7 +193,7 @@ impl RegistryServer {
                                 warn!("Read access currently impossible for proc {}, key {}", proc_id, key_id);
                                 Ok(RegistryResponse::Wait(key_id))
                             }
-                            _ => err,
+                            Err(err) => Err(err),
                         }
                     }
                     RequestType::Write => {
@@ -250,7 +243,8 @@ impl RegistryServer {
             let (proc_id, key_id, req_type, holder_id) = req;
             let response = match req_type {
                 RequestType::Read => {
-                    RegistryResponse::Holder(key_id, holder_id)
+                    let addr = self.proc_id_to_addr(holder_id)?;
+                    RegistryResponse::Holder(key_id, addr)
                 }
                 RequestType::Write => RegistryResponse::Success(key_id),
                 _ => unreachable!(),
@@ -284,14 +278,30 @@ impl RegistryServer {
         Ok(())
     }
 
-    pub fn new(hostname: &str, port: u32) -> Result<Self, RegistryServerError> {
+    pub fn new(port: u16) -> Result<Self, RegistryServerError> {
         Ok(Self {
-            hostname: hostname.to_string(),
-            port,
+            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port),
             access_manager: AccessManager::new(),
             token_stream_map: HashMap::new(),
+            token_addr_map: HashMap::new(),
             id_counter: 0,
             poll: Poll::new()?,
         })
+    }
+
+    fn proc_id_to_addr(
+        &self,
+        proc_id: ProcId,
+    ) -> Result<SocketAddr, RegistryServerError> {
+        let token = Token(proc_id);
+        self.token_addr_map
+            .get(&token)
+            .cloned()
+            .ok_or_else(|| RegistryServerError::UnknownHolder(token))
+    }
+
+    fn remove_client(&mut self, token: Token) {
+        self.token_stream_map.remove(&token);
+        self.token_addr_map.remove(&token);
     }
 }
