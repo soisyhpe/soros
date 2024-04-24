@@ -1,5 +1,8 @@
 use log::{debug, error, info, warn};
-use std::{io::prelude::*, net::TcpStream};
+use std::{
+    io::prelude::*,
+    net::{SocketAddr, TcpStream},
+};
 use thiserror::Error;
 
 use crate::{
@@ -95,9 +98,9 @@ impl ProtocolClient {
     /// Wait until read request is granted.
     pub fn registry_await_read(
         &mut self,
-    ) -> Result<(KeyId, ProcId), ProtocolClientError> {
+    ) -> Result<(KeyId, SocketAddr), ProtocolClientError> {
         match self.registry_handle_response()? {
-            RegistryResponse::Holder(key_id, proc_id) => Ok((key_id, proc_id)),
+            RegistryResponse::Holder(key_id, addr) => Ok((key_id, addr)),
             _ => Err(ProtocolClientError::UnexpectedResponse),
         }
     }
@@ -191,20 +194,20 @@ impl ProtocolClient {
     pub fn registry_read_sync(
         &mut self,
         key_id: KeyId,
-    ) -> Result<ProcId, ProtocolClientError> {
+    ) -> Result<SocketAddr, ProtocolClientError> {
         self.registry_read(key_id)?;
         match self.registry_await_read() {
             Err(ProtocolClientError::WaitError(key_id)) => {
                 warn!("Awaiting read of {}...", key_id);
                 let res = self.registry_await_read()?;
-                if (self.proc_id, key_id) != res {
+                if key_id != res.0 {
                     return Err(ProtocolClientError::UnexpectedResponse);
                 }
                 Ok(res)
             }
             res => res,
         }
-        .map(|(proc_id, _)| proc_id)
+        .map(|(_, addr)| addr)
     }
 
     /// Send a release request to the registry.
