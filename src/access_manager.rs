@@ -2,7 +2,6 @@ use crate::protocol::{KeyId, ProcId, RequestType};
 use log::info;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    fmt,
     sync::mpsc::{channel, Receiver, SendError, Sender},
 };
 use thiserror::Error;
@@ -68,23 +67,18 @@ impl KeyState {
         if let Some(writer) = self.writer {
             return writer;
         }
+        if !self.readers.is_empty() {
+            return *self.readers.iter().next().unwrap();
+        }
         self.creator
     }
 }
 
+#[derive(Debug)]
 pub struct AccessManager {
     pub access_granted_rx: Receiver<AccessGranted>,
     access_granted_tx: Sender<AccessGranted>,
     key_states: HashMap<KeyId, KeyState>,
-}
-
-impl fmt::Debug for AccessManager {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AccessManager")
-            .field("on_access_granted", &"OnAccessGranted")
-            .field("key_states", &self.key_states)
-            .finish()
-    }
 }
 
 impl Default for AccessManager {
@@ -148,7 +142,7 @@ impl AccessManager {
         else {
             return Ok(());
         };
-        let data_user = key_state.holder();
+        let holder = key_state.holder();
 
         match req_type {
             RequestType::Write => {
@@ -156,7 +150,7 @@ impl AccessManager {
                     *proc_id,
                     key_id,
                     RequestType::Write,
-                    data_user,
+                    holder,
                 ))?;
                 key_state.register_writer(*proc_id);
                 key_state.pending_request.pop_front();
@@ -170,7 +164,7 @@ impl AccessManager {
                         *proc_id,
                         key_id,
                         RequestType::Read,
-                        data_user,
+                        holder,
                     ))?;
                     key_state.register_reader(*proc_id);
                     key_state.pending_request.pop_front();

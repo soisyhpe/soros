@@ -88,6 +88,7 @@ impl ProtocolClient {
                     std::str::from_utf8(data.as_slice()).unwrap()
                 );
             })?;
+
         Ok(message)
     }
 

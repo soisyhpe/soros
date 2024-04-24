@@ -91,10 +91,10 @@ macro_rules! colorize {
 
 fn bench_readers_writers(nb_readers: u32, nb_writers: u32, nb_requests: u32) {
     let mut read_handles = vec![];
-    let mut mean_reader_access_time = Duration::default();
+    let mut readers_access_time = Duration::default();
     let mut nb_blocks_readers = 0;
     let mut write_handles = vec![];
-    let mut mean_writer_access_time = Duration::default();
+    let mut writers_access_time = Duration::default();
     let mut nb_blocks_writers = 0;
 
     for _ in 0..nb_readers {
@@ -107,13 +107,13 @@ fn bench_readers_writers(nb_readers: u32, nb_writers: u32, nb_requests: u32) {
     for handle in read_handles {
         let (mean_access_time, nb_blocks) =
             handle.join().unwrap().expect("read failed");
-        mean_reader_access_time += mean_access_time;
+        readers_access_time += mean_access_time;
         nb_blocks_readers += nb_blocks;
     }
     for handle in write_handles {
         let (mean_access_time, nb_blocks) =
             handle.join().unwrap().expect("write failed");
-        mean_writer_access_time += mean_access_time;
+        writers_access_time += mean_access_time;
         nb_blocks_writers += nb_blocks;
     }
 
@@ -133,6 +133,15 @@ fn bench_readers_writers(nb_readers: u32, nb_writers: u32, nb_requests: u32) {
         ratio_blocked_writers = 0.0;
     }
 
+    let mut mean_readers_access_time = Duration::default();
+    if nb_readers != 0 {
+        mean_readers_access_time = readers_access_time / nb_readers;
+    }
+    let mut mean_writers_access_time = Duration::default();
+    if nb_writers != 0 {
+        mean_writers_access_time = writers_access_time / nb_writers;
+    }
+
     println!(
         "For a ratio of {} ({}/{}) readers and {} writers ({}/{}), with {} requests",
         colorize!(BLUE, format!("{}%", ratio_readers)),
@@ -145,14 +154,26 @@ fn bench_readers_writers(nb_readers: u32, nb_writers: u32, nb_requests: u32) {
     );
     println!(
         "- Mean read access time: {}, access blocked: {} ({}/{})",
-        colorize!(YELLOW, format!("{:?}", mean_reader_access_time)),
+        colorize!(
+            YELLOW,
+            format!(
+                "{:?} (total: {:?})",
+                mean_readers_access_time, readers_access_time
+            )
+        ),
         colorize!(BLUE, ratio_blocked_readers),
         nb_blocks_readers,
         nb_access_readers
     );
     println!(
         "- Mean write access time: {}, access blocked: {} ({}/{})",
-        colorize!(YELLOW, format!("{:?}", mean_writer_access_time)),
+        colorize!(
+            YELLOW,
+            format!(
+                "{:?} (total: {:?})",
+                mean_writers_access_time, writers_access_time
+            )
+        ),
         colorize!(BLUE, ratio_blocked_writers),
         nb_blocks_writers,
         nb_access_writers
@@ -166,7 +187,7 @@ fn main() {
 
     thread::spawn(init).join().unwrap().expect("init failed");
 
-    let nb_requests = 100;
+    let nb_requests = 1000;
     bench_readers_writers(10, 0, nb_requests);
     bench_readers_writers(0, 10, nb_requests);
     bench_readers_writers(8, 2, nb_requests);
