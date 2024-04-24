@@ -1,4 +1,5 @@
 use std::{
+    fs::{self, File},
     thread,
     time::{Duration, Instant},
 };
@@ -89,7 +90,12 @@ macro_rules! colorize {
     };
 }
 
-fn bench_readers_writers(nb_readers: u32, nb_writers: u32, nb_requests: u32) {
+fn bench_readers_writers(
+    nb_readers: u32,
+    nb_writers: u32,
+    nb_requests: u32,
+    wtr: &mut csv::Writer<File>,
+) {
     let mut read_handles = vec![];
     let mut readers_access_time = Duration::default();
     let mut nb_blocks_readers = 0;
@@ -178,6 +184,19 @@ fn bench_readers_writers(nb_readers: u32, nb_writers: u32, nb_requests: u32) {
         nb_blocks_writers,
         nb_access_writers
     );
+
+    // write data to csv for plots
+    wtr.write_record(&[
+        nb_readers.to_string(),
+        nb_writers.to_string(),
+        mean_readers_access_time.as_nanos().to_string(),
+        mean_writers_access_time.as_nanos().to_string(),
+        nb_blocks_readers.to_string(),
+        nb_blocks_writers.to_string(),
+        nb_access_readers.to_string(),
+        nb_access_writers.to_string(),
+    ])
+    .unwrap();
 }
 
 fn main() {
@@ -187,12 +206,27 @@ fn main() {
 
     thread::spawn(init).join().unwrap().expect("init failed");
 
+    fs::create_dir_all("generated").unwrap();
+    let file = File::create("generated/registry-bench.csv").unwrap();
+    let mut wtr = csv::Writer::from_writer(file);
+    wtr.write_record([
+        "nb_readers",
+        "nb_writers",
+        "readers_access_time",
+        "writers_access_time",
+        "nb_blocks_readers",
+        "nb_blocks_writers",
+        "nb_access_readers",
+        "nb_access_writers",
+    ])
+    .unwrap();
+
     let nb_requests = 1000;
-    bench_readers_writers(10, 0, nb_requests);
-    bench_readers_writers(0, 10, nb_requests);
-    bench_readers_writers(8, 2, nb_requests);
-    bench_readers_writers(2, 8, nb_requests);
-    bench_readers_writers(5, 5, nb_requests);
+    bench_readers_writers(10, 0, nb_requests, &mut wtr);
+    bench_readers_writers(0, 10, nb_requests, &mut wtr);
+    bench_readers_writers(8, 2, nb_requests, &mut wtr);
+    bench_readers_writers(2, 8, nb_requests, &mut wtr);
+    bench_readers_writers(5, 5, nb_requests, &mut wtr);
 
     thread::spawn(cleanup)
         .join()
