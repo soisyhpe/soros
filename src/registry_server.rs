@@ -30,6 +30,8 @@ pub enum RegistryServerError {
     AccessManager(#[from] AccessManagerError),
     #[error("Invalid {:?}", .0)]
     InvalidToken(Token),
+    #[error("Unknown data holder {:?}", .0)]
+    UnknownHolder(Token),
     #[error("Stop requested")]
     StopRequest,
 }
@@ -295,7 +297,7 @@ impl RegistryServer {
         self.token_addr_map
             .get(&token)
             .cloned()
-            .ok_or_else(|| RegistryServerError::InvalidToken(token))
+            .ok_or_else(|| RegistryServerError::UnknownHolder(token))
     }
 
     fn remove_client(&mut self, token: Token) {

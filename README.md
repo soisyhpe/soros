@@ -16,13 +16,13 @@ This project is a distributed key-value store system that facilitates storage an
 Run the registry server:
 
 ```bash
-cargo run --bin server
+cargo run --bin server 8080
 ```
 
 Run the client examples:
 
 ```bash
-cargo run --bin client
+cargo run --bin client localhost 8080
 ```
 
 Run the tests:
