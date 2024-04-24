@@ -1,23 +1,76 @@
-use std::{
-    io::{Read, Write},
-    net::TcpStream,
+use std::thread;
+
+use env_logger::Env;
+use log::{error, info, warn};
+use soros::{
+    handle_wait_error,
+    protocol_client::{ProtocolClient, ProtocolClientError},
 };
 
-fn client() {
-    // Écoute sur la socket TCP
-    let mut stream = TcpStream::connect("127.0.0.1:6969").expect("Error: Faied to bind!");
+fn basic_usage() -> Result<(), ProtocolClientError> {
+    let mut protocol_client = ProtocolClient::new("localhost", 8888)?;
 
-    // Envoie de la requête
-    let request = "Coucou, tu veux voir ma... ?";
-    stream.write(request.as_bytes()).unwrap();
+    let mut _data = "my_data".to_string();
+    let data_key = 1;
 
-    // Réception de la réponse
-    let mut answer = String::new();
-    stream.read_to_string(&mut answer).unwrap();
+    protocol_client.registry_create(data_key)?;
+    let _ = protocol_client.registry_create(data_key);
+    protocol_client.registry_write_sync(data_key)?;
 
-    println!("Received: {}", answer);
+    info!("Write of the data with key {}", data_key);
+    _data = "modified_data".to_string();
+
+    protocol_client.registry_release(data_key)?;
+
+    let holder = protocol_client.registry_read_sync(data_key)?;
+
+    // tODO: missing peer to peer implementation to get the data content
+    info!("Read of the data with key {}, holder: {}", data_key, holder);
+
+    protocol_client.registry_release(data_key)?;
+    protocol_client.registry_delete(data_key)?;
+
+    Ok(())
 }
 
-fn main() {
-    client();
+fn advanced_usage() -> Result<(), ProtocolClientError> {
+    let mut protocol_client = ProtocolClient::new("localhost", 8888)?;
+    let data_key = 2;
+
+    let _ = protocol_client.registry_create(data_key);
+
+    protocol_client.registry_write_sync(data_key)?;
+
+    protocol_client.registry_read(data_key)?;
+    handle_wait_error!(protocol_client.registry_await_read(), {
+        warn!("Wait error for read access of {}", data_key);
+        protocol_client.registry_release(data_key)?;
+        protocol_client.registry_await_read()?;
+    });
+    protocol_client.registry_release(data_key)?;
+
+    let holder = protocol_client.registry_read_sync(data_key)?;
+    info!("Holder of the key: {:?}", holder);
+
+    protocol_client.registry_release(data_key)?;
+    protocol_client.registry_delete(data_key)?;
+
+    Ok(())
+}
+
+fn main() -> Result<(), ProtocolClientError> {
+    env_logger::Builder::from_env(Env::default().default_filter_or("info"))
+        .init();
+
+    let handles =
+        vec![thread::spawn(basic_usage), thread::spawn(advanced_usage)];
+
+    for handle in handles {
+        let _ = handle
+            .join()
+            .expect("Failed to join thread")
+            .inspect_err(|err| error!("Thread error: {}", err));
+    }
+
+    Ok(())
 }

@@ -1,36 +1,37 @@
+use crate::protocol::{KeyId, ProcId, RequestType};
+use log::info;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
-    ops::Deref,
+    sync::mpsc::{channel, Receiver, SendError, Sender},
 };
 use thiserror::Error;
 
 #[non_exhaustive]
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AccessManagerError {
-    #[error("Could not grant access request for proc: {0}, with key: {1}")]
+    #[error("send error: {0}")]
+    SendError(#[from] SendError<AccessGranted>),
+    #[error("could not grant access request for proc: {0}, with key: {1}")]
     RequestAccess(ProcId, KeyId),
-    #[error("Could not release access for proc: {0}, with key: {1}")]
+    #[error("could not release access for proc: {0}, with key: {1}")]
     ReleaseAccess(ProcId, KeyId),
-    #[error("Key already exist: {0}")]
+    #[error("key currently accessed")]
+    KeyAccessed,
+    #[error("key already exist: {0}")]
     KeyExists(KeyId),
-    #[error("Key not found: {0}")]
+    #[error("key not found: {0}")]
     KeyNotFound(KeyId),
 }
 
-/// Unique identifier for a process.
-type ProcId = usize;
-/// Unique identifier for a key.
-type KeyId = usize;
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum RequestType {
-    Writer,
-    Reader,
-}
-
-/// Closure called when access is granted to a process.
-pub type OnAccessGranted = Box<dyn Fn(ProcId, KeyId, RequestType)>;
+/// Data sent to the channel when an access is granted to a process.
+///
+/// Contains the following information:
+/// - The granted process id.
+/// - The key associated with the access.
+/// - The type of request.
+/// - The id of the holder.
+pub type AccessGranted = (ProcId, KeyId, RequestType, ProcId);
 
 /// Current state of a specific key, tracking current readers and writer.
 /// Pending requests are processed alternately to ensure fair access.
@@ -60,10 +61,20 @@ impl KeyState {
     fn register_writer(&mut self, proc_id: ProcId) {
         self.writer = Some(proc_id);
     }
+
+    // Find a processus that knows the key's data
+    // The writer has the priority, because he can modify the data
+    fn holder(&self) -> ProcId {
+        if let Some(writer) = self.writer {
+            return writer;
+        }
+        self.creator
+    }
 }
 
 pub struct AccessManager {
-    on_access_granted: OnAccessGranted,
+    pub access_granted_rx: Receiver<AccessGranted>,
+    access_granted_tx: Sender<AccessGranted>,
     key_states: HashMap<KeyId, KeyState>,
 }
 
@@ -76,6 +87,12 @@ impl fmt::Debug for AccessManager {
     }
 }
 
+impl Default for AccessManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AccessManager {
     /// Create a new key if it does not already exist.
     pub fn create(
@@ -83,6 +100,7 @@ impl AccessManager {
         proc_id: ProcId,
         key_id: KeyId,
     ) -> Result<(), AccessManagerError> {
+        info!("Create request for proc: {}, key: {}", proc_id, key_id);
         if self.key_states.contains_key(&key_id) {
             return Err(AccessManagerError::KeyExists(key_id));
         }
@@ -92,8 +110,10 @@ impl AccessManager {
     }
 
     pub fn delete(&mut self, key_id: KeyId) -> Result<(), AccessManagerError> {
-        if !self.key_states.contains_key(&key_id) {
-            return Err(AccessManagerError::KeyNotFound(key_id));
+        info!("Delete request for key: {}", key_id);
+        let key_state = self.get_key_state(key_id)?;
+        if !key_state.readers.is_empty() || key_state.writer.is_some() {
+            return Err(AccessManagerError::KeyAccessed);
         }
 
         self.key_states.remove(&key_id);
@@ -119,43 +139,85 @@ impl AccessManager {
     }
 
     /// Handle pending request queue for a given key
-    fn handle_requesting(&mut self, key_id: KeyId) {
+    fn handle_requesting(
+        &mut self,
+        key_id: KeyId,
+    ) -> Result<(), AccessManagerError> {
         let key_state = self.key_states.get_mut(&key_id).unwrap();
         let Some((proc_id, req_type)) = key_state.pending_request.front()
         else {
-            return;
+            return Ok(());
         };
+        let data_user = key_state.holder();
+
         match req_type {
-            RequestType::Writer => {
-                self.on_access_granted.deref()(
+            RequestType::Write => {
+                self.access_granted_tx.send((
                     *proc_id,
                     key_id,
-                    RequestType::Writer,
-                );
+                    RequestType::Write,
+                    data_user,
+                ))?;
                 key_state.register_writer(*proc_id);
                 key_state.pending_request.pop_front();
+                Ok(())
             }
-            RequestType::Reader => {
-                while let Some((proc_id, RequestType::Reader)) =
+            RequestType::Read => {
+                while let Some((proc_id, RequestType::Read)) =
                     key_state.pending_request.front()
                 {
-                    self.on_access_granted.deref()(
+                    self.access_granted_tx.send((
                         *proc_id,
                         key_id,
-                        RequestType::Reader,
-                    );
+                        RequestType::Read,
+                        data_user,
+                    ))?;
                     key_state.register_reader(*proc_id);
                     key_state.pending_request.pop_front();
                 }
+                Ok(())
+            }
+            _ => {
+                panic!("Unexpected request type")
             }
         }
     }
 
-    pub fn new(on_grant: OnAccessGranted) -> AccessManager {
+    pub fn new() -> AccessManager {
+        let (access_tx, access_rx) = channel::<AccessGranted>();
         AccessManager {
-            on_access_granted: on_grant,
+            access_granted_tx: access_tx,
+            access_granted_rx: access_rx,
             key_states: HashMap::new(),
         }
+    }
+
+    /// Request read access for a process.
+    /// Multiple read are possible at the same time.
+    pub fn read(
+        &mut self,
+        proc_id: ProcId,
+        key_id: KeyId,
+    ) -> Result<ProcId, AccessManagerError> {
+        info!("Read request for proc: {}, key: {}", proc_id, key_id);
+        let key_state = self.get_key_state_mut(key_id)?;
+
+        let requesting_writer = key_state
+            .pending_request
+            .front()
+            .is_some_and(|req| matches!(req.1, RequestType::Write));
+
+        if key_state.writer.is_some() || requesting_writer {
+            key_state
+                .pending_request
+                .push_back((proc_id, RequestType::Read));
+            return Err(AccessManagerError::RequestAccess(proc_id, key_id));
+        }
+
+        key_state.register_reader(proc_id);
+        let data_user = key_state.holder();
+
+        Ok(data_user)
     }
 
     /// Release write / read access for a process.
@@ -164,6 +226,7 @@ impl AccessManager {
         proc_id: ProcId,
         key_id: KeyId,
     ) -> Result<(), AccessManagerError> {
+        info!("Release request for proc: {}, key: {}", proc_id, key_id);
         let key_state = self.get_key_state_mut(key_id)?;
 
         let writer_release =
@@ -176,55 +239,31 @@ impl AccessManager {
 
         if writer_release {
             key_state.writer = None;
-            self.handle_requesting(key_id);
+            self.handle_requesting(key_id)?;
         } else if reader_release {
             key_state.readers.remove(&proc_id);
             if key_state.readers.is_empty() {
-                self.handle_requesting(key_id);
+                self.handle_requesting(key_id)?;
             }
         }
 
         Ok(())
     }
 
-    /// Request read access for a process.
-    /// Multiple read are possible at the same time.
-    pub fn request_read(
-        &mut self,
-        proc_id: ProcId,
-        key_id: KeyId,
-    ) -> Result<(), AccessManagerError> {
-        let key_state = self.get_key_state_mut(key_id)?;
-
-        let requesting_writer = key_state
-            .pending_request
-            .front()
-            .is_some_and(|req| matches!(req.1, RequestType::Writer));
-
-        if key_state.writer.is_some() || requesting_writer {
-            key_state
-                .pending_request
-                .push_back((proc_id, RequestType::Reader));
-            return Err(AccessManagerError::RequestAccess(proc_id, key_id));
-        }
-
-        key_state.register_reader(proc_id);
-        Ok(())
-    }
-
     /// Reqest write access for a process.
     /// Only one write access at a time.
-    pub fn request_write(
+    pub fn write(
         &mut self,
         proc_id: ProcId,
         key_id: KeyId,
     ) -> Result<(), AccessManagerError> {
+        info!("Write request for proc: {}, key: {}", proc_id, key_id);
         let key_state = self.get_key_state_mut(key_id)?;
 
         if !key_state.readers.is_empty() || key_state.writer.is_some() {
             key_state
                 .pending_request
-                .push_back((proc_id, RequestType::Writer));
+                .push_back((proc_id, RequestType::Write));
             return Err(AccessManagerError::RequestAccess(proc_id, key_id));
         }
 
@@ -237,24 +276,9 @@ impl AccessManager {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::sync::mpsc::{channel, Receiver, Sender};
 
     fn create_manager() -> AccessManager {
-        AccessManager::new(Box::new(|_, _, _| {}))
-    }
-
-    fn create_manager_with_grant(
-    ) -> (AccessManager, Sender<OnAccessGranted>, Receiver<bool>) {
-        let (fn_tx, fn_rx) = channel::<OnAccessGranted>();
-        let (call_tx, call_rx) = channel();
-        (
-            AccessManager::new(Box::new(move |proc_id, key_id, req_type| {
-                fn_rx.try_recv().unwrap()(proc_id, key_id, req_type);
-                call_tx.send(true).unwrap();
-            })),
-            fn_tx,
-            call_rx,
-        )
+        AccessManager::new()
     }
 
     #[test]
@@ -278,58 +302,60 @@ mod tests {
     }
 
     #[test]
-    fn test_request_read() -> Result<(), AccessManagerError> {
+    fn test_read() -> Result<(), AccessManagerError> {
         let mut manager = create_manager();
-        assert!(manager.request_read(1, 0).is_err());
+        assert!(manager.read(1, 0).is_err());
         manager.create(0, 0)?;
-        manager.request_read(1, 0)?;
-        manager.request_read(2, 0)?;
-        manager.request_read(3, 0)?;
+        manager.read(1, 0)?;
+        manager.read(2, 0)?;
+        manager.read(3, 0)?;
+        assert!(manager.delete(0).is_err());
         assert_eq!(manager.get_key_state(0)?.pending_request, vec![]);
         assert_eq!(manager.get_key_state(0)?.readers, HashSet::from([1, 2, 3]));
         Ok(())
     }
 
     #[test]
-    fn test_request_write() -> Result<(), AccessManagerError> {
+    fn test_write() -> Result<(), AccessManagerError> {
         let mut manager = create_manager();
-        assert!(manager.request_write(1, 0).is_err());
+        assert!(manager.write(1, 0).is_err());
         manager.create(0, 0)?;
-        manager.request_write(1, 0)?;
-        assert!(manager.request_write(2, 0).is_err());
+        manager.write(1, 0)?;
+        assert!(manager.delete(0).is_err());
+        assert!(manager.write(2, 0).is_err());
         assert_eq!(
             manager.get_key_state(0)?.pending_request,
-            vec![(2, RequestType::Writer)]
+            vec![(2, RequestType::Write)]
         );
         assert_eq!(manager.get_key_state(0)?.writer, Some(1));
         Ok(())
     }
 
     #[test]
-    fn test_request_read_before_write() -> Result<(), AccessManagerError> {
+    fn test_read_before_write() -> Result<(), AccessManagerError> {
         let mut manager = create_manager();
         manager.create(0, 0)?;
-        manager.request_read(1, 0)?;
-        manager.request_read(2, 0)?;
-        assert!(manager.request_write(3, 0).is_err());
-        assert!(manager.request_read(4, 0).is_err());
+        manager.read(1, 0)?;
+        manager.read(2, 0)?;
+        assert!(manager.write(3, 0).is_err());
+        assert!(manager.read(4, 0).is_err());
         assert_eq!(
             manager.get_key_state(0)?.pending_request,
-            vec![(3, RequestType::Writer), (4, RequestType::Reader)]
+            vec![(3, RequestType::Write), (4, RequestType::Read)]
         );
         Ok(())
     }
 
     #[test]
-    fn test_request_write_before_read() -> Result<(), AccessManagerError> {
+    fn test_write_before_read() -> Result<(), AccessManagerError> {
         let mut manager = create_manager();
         manager.create(0, 0)?;
-        manager.request_write(1, 0)?;
-        assert!(manager.request_read(2, 0).is_err());
-        assert!(manager.request_write(3, 0).is_err());
+        manager.write(1, 0)?;
+        assert!(manager.read(2, 0).is_err());
+        assert!(manager.write(3, 0).is_err());
         assert_eq!(
             manager.get_key_state(0)?.pending_request,
-            vec![(2, RequestType::Reader), (3, RequestType::Writer)]
+            vec![(2, RequestType::Read), (3, RequestType::Write)]
         );
         Ok(())
     }
@@ -339,7 +365,7 @@ mod tests {
         let mut manager = create_manager();
         manager.create(0, 0)?;
         assert!(manager.release(1, 0).is_err());
-        manager.request_read(1, 0)?;
+        manager.read(1, 0)?;
         assert!(manager.release(2, 0).is_err());
         manager.release(1, 0)?;
         assert!(manager.get_key_state(0)?.readers.is_empty());
@@ -351,63 +377,57 @@ mod tests {
         let mut manager = create_manager();
         manager.create(0, 0)?;
         assert!(manager.release(1, 0).is_err());
-        manager.request_write(1, 0)?;
+        manager.write(1, 0)?;
         assert!(manager.release(2, 0).is_err());
         manager.release(1, 0)?;
         assert_eq!(manager.get_key_state(0)?.writer, None);
         Ok(())
     }
 
-    macro_rules! assert_on_grant {
-        ($tx:expr, $proc:expr, $key:expr, $req:expr) => {
-            $tx.send(Box::new(move |proc_id, key_id, req_type| {
-                assert_eq!((proc_id, key_id, req_type), ($proc, $key, $req));
-            }))
-            .unwrap();
+    macro_rules! assert_grant {
+        ($manager:expr, $proc:expr, $key:expr, $req:expr, $holder:expr) => {
+            let data = $manager.access_granted_rx.try_recv().unwrap();
+            assert_eq!(data, ($proc, $key, $req, $holder));
         };
     }
 
     #[test]
     fn test_handling_read_before_write() -> Result<(), AccessManagerError> {
-        let (mut manager, fn_tx, call_rx) = create_manager_with_grant();
+        let mut manager = create_manager();
         manager.create(0, 0)?;
-        manager.request_read(1, 0)?;
-        assert!(manager.request_write(2, 0).is_err());
-        assert!(manager.request_read(3, 0).is_err());
+        manager.read(1, 0)?;
+        assert!(manager.write(2, 0).is_err());
+        assert!(manager.read(3, 0).is_err());
 
-        assert_on_grant!(fn_tx, 2, 0, RequestType::Writer);
         manager.release(1, 0)?;
-        assert_eq!(call_rx.try_iter().count(), 1);
+        assert_grant!(manager, 2, 0, RequestType::Write, 0);
 
-        assert_on_grant!(fn_tx, 3, 0, RequestType::Reader);
         manager.release(2, 0)?;
-        assert_eq!(call_rx.try_iter().count(), 1);
+        assert_grant!(manager, 3, 0, RequestType::Read, 0);
 
         Ok(())
     }
 
     #[test]
     fn test_handling_write_before_read() -> Result<(), AccessManagerError> {
-        let (mut manager, fn_tx, call_rx) = create_manager_with_grant();
+        let mut manager = create_manager();
         manager.create(0, 0)?;
-        manager.request_write(1, 0)?;
-        assert!(manager.request_read(2, 0).is_err());
-        assert!(manager.request_read(3, 0).is_err());
-        assert!(manager.request_read(4, 0).is_err());
-        assert!(manager.request_write(5, 0).is_err());
+        manager.write(1, 0)?;
+        assert!(manager.read(2, 0).is_err());
+        assert!(manager.read(3, 0).is_err());
+        assert!(manager.read(4, 0).is_err());
+        assert!(manager.write(5, 0).is_err());
 
-        for i in 2..=4 {
-            assert_on_grant!(fn_tx, i, 0, RequestType::Reader);
-        }
         manager.release(1, 0)?;
-        assert_eq!(call_rx.try_iter().count(), 3);
+        assert_grant!(manager, 2, 0, RequestType::Read, 0);
+        assert_grant!(manager, 3, 0, RequestType::Read, 0);
+        assert_grant!(manager, 4, 0, RequestType::Read, 0);
 
-        assert_on_grant!(fn_tx, 5, 0, RequestType::Writer);
         manager.release(2, 0)?;
         manager.release(3, 0)?;
-        assert_eq!(call_rx.try_iter().count(), 0);
+        assert_eq!(manager.access_granted_rx.try_iter().count(), 0);
         manager.release(4, 0)?;
-        assert_eq!(call_rx.try_iter().count(), 1);
+        assert_grant!(manager, 5, 0, RequestType::Write, 0);
 
         Ok(())
     }
@@ -415,37 +435,35 @@ mod tests {
     // correspond to the report fairness diagram
     #[test]
     fn test_fairness() -> Result<(), AccessManagerError> {
-        let (mut manager, fn_tx, call_rx) = create_manager_with_grant();
+        let mut manager = create_manager();
         let (x, a, b, c, d) = (0, 1, 2, 3, 4);
         manager.create(a, x)?;
         assert_eq!(manager.get_key_state(x)?.creator, a);
 
-        manager.request_read(a, x)?;
-        assert!(manager.request_write(c, x).is_err());
-        assert!(manager.request_read(b, x).is_err());
+        manager.read(a, x)?;
+        assert!(manager.write(c, x).is_err());
+        assert!(manager.read(b, x).is_err());
         assert_eq!(
             manager.get_key_state(x)?.pending_request,
-            vec![(c, RequestType::Writer), (b, RequestType::Reader)]
+            vec![(c, RequestType::Write), (b, RequestType::Read)]
         );
 
-        assert_on_grant!(fn_tx, c, x, RequestType::Writer);
         manager.release(a, x)?;
-        assert_eq!(call_rx.try_iter().count(), 1);
+        assert_grant!(manager, c, x, RequestType::Write, a);
         assert_eq!(
             manager.get_key_state(x)?.pending_request,
-            vec![(b, RequestType::Reader)]
+            vec![(b, RequestType::Read)]
         );
 
-        assert!(manager.request_read(d, x).is_err());
+        assert!(manager.read(d, x).is_err());
         assert_eq!(
             manager.get_key_state(x)?.pending_request,
-            vec![(b, RequestType::Reader), (d, RequestType::Reader)]
+            vec![(b, RequestType::Read), (d, RequestType::Read)]
         );
 
-        assert_on_grant!(fn_tx, b, x, RequestType::Reader);
-        assert_on_grant!(fn_tx, d, x, RequestType::Reader);
         manager.release(c, 0)?;
-        assert_eq!(call_rx.try_iter().count(), 2);
+        assert_grant!(manager, b, x, RequestType::Read, a);
+        assert_grant!(manager, d, x, RequestType::Read, a);
 
         assert!(manager.get_key_state(x)?.pending_request.is_empty());
         assert_eq!(manager.get_key_state(x)?.readers, HashSet::from([b, d]));
