@@ -27,14 +27,14 @@ pub enum ProtocolClientError {
 #[derive(Debug)]
 pub struct ProtocolClient {
     pub hostname: String,
-    pub port: u32,
+    pub port: u16,
     pub proc_id: ProcId,
     registry_stream: TcpStream,
     curr_data: Vec<u8>,
 }
 
 impl ProtocolClient {
-    pub fn new(hostname: &str, port: u32) -> Result<Self, ProtocolClientError> {
+    pub fn new(hostname: &str, port: u16) -> Result<Self, ProtocolClientError> {
         info!("Trying to connect to the registry: {}:{}", hostname, port);
         let mut registry_stream =
             TcpStream::connect(format!("{}:{}", hostname, port))?;

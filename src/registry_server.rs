@@ -13,7 +13,7 @@ use mio::{
 use std::{
     collections::HashMap,
     io::{self, Read, Write},
-    net::ToSocketAddrs,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 use thiserror::Error;
 
@@ -36,8 +36,7 @@ pub enum RegistryServerError {
 
 #[derive(Debug)]
 pub struct RegistryServer {
-    pub hostname: String,
-    pub port: u32,
+    addr: SocketAddr,
     access_manager: AccessManager,
     poll: Poll,
     token_stream_map: HashMap<Token, TcpStream>,
@@ -46,18 +45,8 @@ pub struct RegistryServer {
 
 impl RegistryServer {
     pub fn bind(&mut self) -> Result<(), RegistryServerError> {
-        info!(
-            "Starting registry server on {}:{}",
-            self.hostname, self.port
-        );
-        let addr_string = format!("{}:{}", self.hostname, self.port);
-        let addr = addr_string.to_socket_addrs()?.next().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::AddrNotAvailable,
-                format!("Could not find address {}", addr_string),
-            )
-        })?;
-        let mut listener = TcpListener::bind(addr)?;
+        info!("Starting registry server on {:?}", self.addr);
+        let mut listener = TcpListener::bind(self.addr)?;
 
         // mio poll, use epoll / kqueue under the hood
         let mut events = Events::with_capacity(128);
@@ -284,10 +273,9 @@ impl RegistryServer {
         Ok(())
     }
 
-    pub fn new(hostname: &str, port: u32) -> Result<Self, RegistryServerError> {
+    pub fn new(port: u16) -> Result<Self, RegistryServerError> {
         Ok(Self {
-            hostname: hostname.to_string(),
-            port,
+            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port),
             access_manager: AccessManager::new(),
             token_stream_map: HashMap::new(),
             id_counter: 0,

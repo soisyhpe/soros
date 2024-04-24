@@ -11,7 +11,7 @@ use soros::{
 };
 
 fn server() -> Result<(), RegistryServerError> {
-    let mut registry_server = RegistryServer::new("localhost", 8888)?;
+    let mut registry_server = RegistryServer::new(8888)?;
     registry_server.bind()?;
     Ok(())
 }
