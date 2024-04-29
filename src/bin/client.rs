@@ -1,4 +1,5 @@
 use std::{env, thread};
+use std::sync::Arc;
 
 use env_logger::Env;
 use log::{error, info, warn};
@@ -6,6 +7,7 @@ use soros::{
     handle_wait_error,
     protocol_client::{ProtocolClient, ProtocolClientError},
 };
+use soros::peer2peer_server::{DataStore, P2PServer};
 
 fn create_protocol_client() -> Result<ProtocolClient, ProtocolClientError> {
     let args: Vec<String> = env::args().collect();
@@ -15,6 +17,12 @@ fn create_protocol_client() -> Result<ProtocolClient, ProtocolClientError> {
 
     let hostname: String = args[1].parse().expect("Invalid hostname");
     let port: u16 = args[2].parse().expect("Invalid port number");
+
+    // P2P server
+    // + 12 because "peer to peer" is 12 characters long
+    let datastore = Arc::new(DataStore::new());
+    P2PServer::new(datastore, &hostname, port + 12)
+        .expect("Failed to create and start P2P server");
 
     ProtocolClient::new(&hostname, port)
 }

@@ -1,18 +1,15 @@
-use std::{io, net::ToSocketAddrs, thread};
+use std::{io, net::ToSocketAddrs};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use mio::{
     Events,
     Interest, net::{TcpListener, TcpStream}, Poll, Token,
 };
 use thiserror::Error;
-use crate::access_manager::{AccessGranted, AccessManagerError};
-use crate::protocol::{DataMessage, KeyId, Message, ProcId, RegistryMessage, RegistryResponse, RequestType};
-use crate::registry_response;
-use crate::registry_server::RegistryServerError;
+use crate::protocol::{DataMessage, KeyId, Message};
 
 #[non_exhaustive]
 #[derive(Debug, Error)]
@@ -38,7 +35,7 @@ impl DataStore {
     }
 
     pub fn create(&mut self, key: KeyId, data: &str) -> Result<(), DataStoreError> {
-        if (self.data_map.contains_key(&key)) {
+        if self.data_map.contains_key(&key) {
             return Err(DataStoreError::KeyAlreadyExists(key));
         }
 
@@ -82,13 +79,12 @@ pub enum P2PServerError {
 #[derive(Debug)]
 pub struct P2PServer {
     pub hostname: String,
-    pub port: u32,
+    pub port: u16,
     pub data_store: Arc<DataStore>,
     pub thread_pool: rayon::ThreadPool,
 }
 
 impl P2PServer {
-
     pub fn get(&mut self, hostname: &str, port: u32, key_id: KeyId) -> Result<String, P2PServerError> {
         info!("Getting data from {}:{}", hostname, port);
 
@@ -109,7 +105,7 @@ impl P2PServer {
         }
     }
 
-    pub fn new(data_store: Arc<DataStore>, hostname: &str, port: u32) -> Result<Self, P2PServerError> {
+    pub fn new(data_store: Arc<DataStore>, hostname: &str, port: u16) -> Result<Self, P2PServerError> {
         info!("Trying to create new p2p server {}:{}", hostname, port);
 
         let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(4).build()?;
@@ -162,7 +158,7 @@ impl P2PServer {
                             // Si la connexion est acceptée
                             Ok((stream, _addr)) => {
                                 // self.thread_pool.install(|| {
-                                    self.handle_connection(stream).expect("Error while handling connection");
+                                self.handle_connection(stream).expect("Error while handling connection");
                                 // })
                             }
 
@@ -183,8 +179,6 @@ impl P2PServer {
                 }
             }
         }
-
-        Ok(())
     }
 
     pub fn handle_connection(&mut self, mut stream: TcpStream) -> Result<(), P2PServerError> {
@@ -201,7 +195,7 @@ impl P2PServer {
                 Err(P2PServerError::IoError(e))
             }
             Ok(size) => {
-                let res = self.handle_request(&buffer[..size]);
+                let _res = self.handle_request(&buffer[..size]);
                 Ok(())
             }
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(()),
@@ -220,7 +214,7 @@ impl P2PServer {
             Message::Data(DataMessage::Request { key_id }) => {
                 let data = self.data_store.get(key_id)?;
                 Ok(DataMessage::Response { data })
-            },
+            }
             _ => Err(P2PServerError::UnexpectedRequest),
         }
     }
@@ -232,7 +226,7 @@ impl P2PServer {
         let message = Message::from_slice(data).inspect_err(|_| {
             error!("data: {:?}", std::str::from_utf8(data).unwrap());
         })?;
-        let response = self.handle_message(message)?;
+        let _response = self.handle_message(message)?;
 
         Ok(())
     }
