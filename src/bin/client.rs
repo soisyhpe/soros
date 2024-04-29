@@ -12,7 +12,7 @@ use soros::peer2peer_server::{DataStore, P2PServer};
 fn create_protocol_client() -> Result<ProtocolClient, ProtocolClientError> {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
-        panic!("Usage: {} <hostname> <port>", args[0]);
+        panic!("Usage: {} <hostname> <server port>", args[0]);
     }
 
     let hostname: String = args[1].parse().expect("Invalid hostname");
