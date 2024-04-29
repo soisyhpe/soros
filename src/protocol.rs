@@ -67,9 +67,9 @@ pub enum RegistryMessage {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum DataMessage {
     /// Request for peer-to-peer data content.
-    Request { _data: u32 },
+    Request { key_id: KeyId },
     /// Response containing peer-to-peer data content.
-    Response { _data: u32 },
+    Response { data: String },
 }
 
 #[macro_export]
