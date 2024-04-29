@@ -88,7 +88,7 @@ pub enum P2PServerError {
 pub struct P2PServer {
     pub hostname: String,
     pub port: u16,
-    pub data_store: Arc<DataStore>,
+    pub data_store: DataStore,
     pub thread_pool: rayon::ThreadPool,
 }
 
@@ -113,7 +113,7 @@ impl P2PServer {
         }
     }
 
-    pub fn new(data_store: Arc<DataStore>, hostname: &str, port: u16) -> Result<Self, P2PServerError> {
+    pub fn new(data_store: DataStore, hostname: &str, port: u16) -> Result<Self, P2PServerError> {
         info!("Trying to create new p2p server {}:{}", hostname, port);
 
         let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(4).build()?;
