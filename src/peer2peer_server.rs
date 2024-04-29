@@ -44,6 +44,14 @@ impl DataStore {
         Ok(())
     }
 
+    pub fn write(&mut self, key: KeyId, new_data: &str) -> Result<(), DataStoreError> {
+        let data = self.data_map.get(&key).ok_or(DataStoreError::KeyDoesNotExists(key))?;
+        let mut data = data.lock().unwrap();
+        *data = new_data.to_string();
+
+        Ok(())
+    }
+
     pub fn delete(&mut self, key: KeyId) -> Result<(), DataStoreError> {
         self.data_map.remove(&key);
 
