@@ -63,7 +63,7 @@ fn basic_usage() -> Result<(), ClientError> {
 
     let holder = protocol_client.registry_read_sync(data_key)?;
 
-    // tODO: missing peer to peer implementation to get the data content
+    // TODO: missing peer to peer implementation to get the data content
     info!("Read of the data with key {}, holder: {}", data_key, holder);
 
     protocol_client.registry_release(data_key)?;
