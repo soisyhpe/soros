@@ -3,11 +3,21 @@ use std::sync::Arc;
 
 use env_logger::Env;
 use log::{error, info, warn};
+use thiserror::Error;
 use soros::{
     handle_wait_error,
     protocol_client::{ProtocolClient, ProtocolClientError},
 };
-use soros::peer2peer_server::{DataStore, P2PServer};
+use soros::peer2peer_server::{DataStore, P2PServer, P2PServerError};
+
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum ClientError {
+    #[error("ProtocolClient error: {0}")]
+    ProtocolClientError(#[from] ProtocolClientError),
+    #[error("P2PServer error: {0}")]
+    P2PServerError(#[from] P2PServerError),
+}
 
 fn create_protocol_client() -> Result<ProtocolClient, ProtocolClientError> {
     let args: Vec<String> = env::args().collect();
@@ -18,17 +28,26 @@ fn create_protocol_client() -> Result<ProtocolClient, ProtocolClientError> {
     let hostname: String = args[1].parse().expect("Invalid hostname");
     let port: u16 = args[2].parse().expect("Invalid port number");
 
-    // P2P server
-    // + 12 because "peer to peer" is 12 characters long
-    let datastore = Arc::new(DataStore::new());
-    P2PServer::new(datastore, &hostname, port + 12)
-        .expect("Failed to create and start P2P server");
-
     ProtocolClient::new(&hostname, port)
 }
 
-fn basic_usage() -> Result<(), ProtocolClientError> {
+fn create_p2p_server() -> Result<P2PServer, P2PServerError> {
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 3 {
+        panic!("Usage: {} <hostname> <server port>", args[0]);
+    }
+
+    let hostname: String = args[1].parse().expect("Invalid hostname");
+    let port: u16 = args[2].parse().expect("Invalid port number");
+
+    let datastore = Arc::new(DataStore::new());
+
+    P2PServer::new(datastore, &hostname, port + 12) // + 12 because "peer to peer" is 12 characters long
+}
+
+fn basic_usage() -> Result<(), ClientError> {
     let mut protocol_client = create_protocol_client()?;
+    let mut _p2p_server = create_p2p_server()?;
 
     let mut _data = "my_data".to_string();
     let data_key = 1;
@@ -53,8 +72,10 @@ fn basic_usage() -> Result<(), ProtocolClientError> {
     Ok(())
 }
 
-fn advanced_usage() -> Result<(), ProtocolClientError> {
+fn advanced_usage() -> Result<(), ClientError> {
     let mut protocol_client = create_protocol_client()?;
+    let mut _p2p_server = create_p2p_server()?;
+
     let data_key = 2;
 
     let _ = protocol_client.registry_create(data_key);
@@ -78,7 +99,7 @@ fn advanced_usage() -> Result<(), ProtocolClientError> {
     Ok(())
 }
 
-fn main() -> Result<(), ProtocolClientError> {
+fn main() -> Result<(), ClientError> {
     env_logger::Builder::from_env(Env::default().default_filter_or("info"))
         .init();
 
