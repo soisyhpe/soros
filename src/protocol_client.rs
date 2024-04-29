@@ -52,7 +52,7 @@ impl ProtocolClient {
             curr_data,
             proc_id,
             hostname: hostname.to_string(),
-            port,
+            port, // TODO: this is the registry server port
             registry_stream,
         })
     }
