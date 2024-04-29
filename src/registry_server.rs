@@ -110,7 +110,7 @@ impl RegistryServer {
             Interest::READABLE,
         )?;
 
-        info!("handling connection from {:?}", stream.peer_addr());
+        info!("Handling connection from {:?}", stream.peer_addr());
         let data = registry_connection!(token.0).to_vec()?;
         stream.write_all(&data)?;
 
