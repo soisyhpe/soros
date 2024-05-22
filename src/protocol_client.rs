@@ -39,13 +39,8 @@ pub enum ProtocolClientError {
 pub struct ProtocolClient {
     is_primary: bool,
 
-    /* Primary server */
-    pub primary_hostname: String,
-    pub primary_port: u16,
-
-    /* Secondary server */
-    pub secondary_hostname: String,
-    pub secondary_port: u16,
+    pub primary_server: SocketAddr,
+    pub secondary_server: SocketAddr,
 
     pub proc_id: ProcId,
     registry_stream: TcpStream,
@@ -53,23 +48,22 @@ pub struct ProtocolClient {
 }
 
 impl ProtocolClient {
-    pub fn new(primary_hostname: &str, primary_port: u16,
-               secondary_hostname: &str, secondary_port: u16) -> Result<Self, ProtocolClientError> {
-        info!("Trying to connect to the primary registry: {}:{}", primary_hostname, primary_port);
+    pub fn new(primary_server: SocketAddr, secondary_server: SocketAddr) -> Result<Self, ProtocolClientError> {
+        info!("Trying to connect to the primary registry: {:?}", primary_server);
 
         let mut is_primary = true;
         let mut registry_stream=
-            match TcpStream::connect(format!("{}:{}", primary_hostname, primary_port)) {
+            match TcpStream::connect(primary_server) {
                 // If the connection is successful, return the stream
                 Ok(stream) => stream,
 
                 // If the primary server is down, switch to the secondary server
                 Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
-                    warn!("Failed to connect to primary server: {}:{}", primary_hostname, primary_port);
-                    info!("Switching to secondary server: {}:{}", secondary_hostname, secondary_port);
+                    warn!("Failed to connect to primary server: {:?}", primary_server);
+                    info!("Switching to secondary server: {:?}", secondary_server);
 
                     is_primary = false;
-                    TcpStream::connect(format!("{}:{}", secondary_hostname, secondary_port))?
+                    TcpStream::connect(secondary_server)?
                 },
 
                 // If the error is not a connection refused, return the error
@@ -91,13 +85,8 @@ impl ProtocolClient {
         Ok(Self {
             is_primary,
 
-            /* Primary server */
-            primary_hostname: primary_hostname.to_string(),
-            primary_port,
-
-            /* Secondary server */
-            secondary_hostname: secondary_hostname.to_string(),
-            secondary_port,
+            primary_server,
+            secondary_server,
 
             registry_stream,
             proc_id,
@@ -288,14 +277,11 @@ impl ProtocolClient {
                 // If the primary server is down, switch to the secondary server
                 if e.kind() == std::io::ErrorKind::ConnectionRefused
                     || e.kind() == std::io::ErrorKind::TimedOut {
-                    warn!("Primary server is not responding, switching to secondary server: {}:{}",
-                        self.primary_hostname, self.primary_port);
-                    info!("Switching to secondary server: {}:{}",
-                        self.secondary_hostname, self.secondary_port);
+                    warn!("Primary server is not responding");
+                    info!("Switching to secondary server: {:?}", self.secondary_server);
 
                     self.registry_stream =
-                        TcpStream::connect(format!("{}:{}",
-                                                   self.secondary_hostname, self.secondary_port))?;
+                        TcpStream::connect(self.secondary_server)?;
 
                     // 5 seconds timeout for the registry
                     let timeout = Duration::from_secs(5);
