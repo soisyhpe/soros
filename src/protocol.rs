@@ -30,6 +30,7 @@ impl Message {
 /// Represents different kind of responses from the registry.
 #[derive(Serialize, Deserialize, Debug)]
 pub enum RegistryResponse {
+    Ack,
     Success(KeyId),
     /// The request cannot be fullfilled yet
     Wait(KeyId),
@@ -52,10 +53,13 @@ pub enum RequestType {
 pub enum RegistryMessage {
     /// Unique proc id given by the registry server during connection
     Connection(ProcId),
+    /// Notify secondary server when new connection is established, send id counter
+    ConnectionEstablished(ProcId),
     /// Request for accessing registry data.
     Request {
+        proc_id: ProcId,
         request_type: RequestType,
-        key_id: KeyId,
+        key_id: KeyId
     },
     /// Response containing registry data.
     Response(RegistryResponse),
@@ -74,10 +78,11 @@ pub enum DataMessage {
 
 #[macro_export]
 macro_rules! registry_request {
-    ($key_id: expr, $request_type: ident) => {
+    ($key_id: expr, $proc_id: expr, $request_type: ident) => {
         Message::Registry(RegistryMessage::Request {
             key_id: $key_id,
-            request_type: $request_type,
+            proc_id: $proc_id,
+            request_type: $request_type
         })
     };
 }
@@ -86,6 +91,13 @@ macro_rules! registry_request {
 macro_rules! registry_connection {
     ($proc_id: expr) => {
         Message::Registry(RegistryMessage::Connection($proc_id))
+    };
+}
+
+#[macro_export]
+macro_rules! registry_connection_established {
+    ($id_counter: expr) => {
+        Message::Registry(RegistryMessage::ConnectionEstablished($id_counter))
     };
 }
 
