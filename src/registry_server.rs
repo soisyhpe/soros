@@ -1,10 +1,6 @@
-use crate::{
-    access_manager::{AccessGranted, AccessManager, AccessManagerError},
-    protocol::{
-        Message, ProcId, RegistryMessage, RegistryResponse, RequestType,
-    },
-    registry_connection, registry_response,
-};
+use crate::{access_manager::{AccessGranted, AccessManager, AccessManagerError}, protocol::{
+    Message, ProcId, RegistryMessage, RegistryResponse, RequestType,
+}, registry_connection, registry_connection_established, registry_response};
 use log::{debug, error, info, warn};
 use mio::{
     net::{TcpListener, TcpStream},
@@ -22,16 +18,22 @@ use thiserror::Error;
 pub enum RegistryServerError {
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
-    #[error("serialization error: {0}")]
+
+    #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
-    #[error("unexpected request")]
+
+    #[error("Unexpected request")]
     UnexpectedRequest,
-    #[error("access manager error: {0}")]
+
+    #[error("Access manager error: {0}")]
     AccessManager(#[from] AccessManagerError),
+
     #[error("Invalid {:?}", .0)]
     InvalidToken(Token),
+
     #[error("Unknown data holder {:?}", .0)]
     UnknownHolder(Token),
+
     #[error("Stop requested")]
     StopRequest,
 }
@@ -39,14 +41,48 @@ pub enum RegistryServerError {
 #[derive(Debug)]
 pub struct RegistryServer {
     addr: SocketAddr,
+    backup_addr: Option<SocketAddr>,
+    backup_stream: Option<TcpStream>,
+
     access_manager: AccessManager,
-    poll: Poll,
     token_stream_map: HashMap<Token, TcpStream>,
     token_addr_map: HashMap<Token, SocketAddr>,
+    poll: Poll,
+
     id_counter: ProcId,
 }
 
 impl RegistryServer {
+    pub fn new(primary_port: u16, secondary_server: Option<SocketAddr>) -> Result<Self, RegistryServerError> {
+        let mut backup_addr: Option<SocketAddr> = None;
+        let mut backup_stream: Option<TcpStream> = None;
+
+        // Check if secondary port is provided
+        if secondary_server.is_none() {
+            warn!("Secondary server not provided, no backup for this server registry!");
+        } else {
+            let server = secondary_server.unwrap();
+
+            info!("Secondary server provided, requests will be forwarded on {:?}", server);
+
+            backup_addr = Some(server);
+            backup_stream = Some(TcpStream::connect(backup_addr.unwrap())?);
+        }
+
+        Ok(Self {
+            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), primary_port),
+            backup_addr,
+            backup_stream,
+
+            access_manager: AccessManager::new(),
+            token_stream_map: HashMap::new(),
+            token_addr_map: HashMap::new(),
+            poll: Poll::new()?,
+
+            id_counter: 0,
+        })
+    }
+
     pub fn bind(&mut self) -> Result<(), RegistryServerError> {
         info!("Starting registry server on {:?}", self.addr);
         let mut listener = TcpListener::bind(self.addr)?;
@@ -71,10 +107,10 @@ impl RegistryServer {
                                 self.handle_connection(stream, addr)?
                             }
                             Err(ref e)
-                                if e.kind() == io::ErrorKind::WouldBlock =>
-                            {
-                                break
-                            }
+                            if e.kind() == io::ErrorKind::WouldBlock =>
+                                {
+                                    break;
+                                }
                             Err(e) => panic!("Unexpected error: {}", e),
                         }
                     },
@@ -104,6 +140,11 @@ impl RegistryServer {
     ) -> Result<(), RegistryServerError> {
         self.id_counter += 1;
         let token = Token(self.id_counter);
+
+        // Notify secondary server when new connection is established
+        let data = registry_connection_established!(self.id_counter).to_vec()?;
+        self.forward_request(&data)?;
+
         self.poll.registry().register(
             &mut stream,
             token,
@@ -160,17 +201,21 @@ impl RegistryServer {
     fn handle_message(
         &mut self,
         message: Message,
-        proc_id: ProcId,
     ) -> Result<RegistryResponse, RegistryServerError> {
         debug!("handling message: {:?}", message);
         match message {
             Message::Registry(RegistryMessage::StopRequest) => {
                 Err(RegistryServerError::StopRequest)
             }
+            Message::Registry(RegistryMessage::ConnectionEstablished(id_counter)) => {
+                self.id_counter = id_counter;
+                Ok(RegistryResponse::Ack)
+            }
             Message::Registry(RegistryMessage::Request {
-                request_type,
-                key_id,
-            }) => {
+                                  proc_id,
+                                  request_type,
+                                  key_id,
+                              }) => {
                 let response = match request_type {
                     RequestType::Create => self
                         .access_manager
@@ -187,9 +232,9 @@ impl RegistryServer {
                                 Ok(RegistryResponse::Holder(key_id, addr))
                             }
                             Err(AccessManagerError::RequestAccess(
-                                proc_id,
-                                key_id,
-                            )) => {
+                                    proc_id,
+                                    key_id,
+                                )) => {
                                 warn!("Read access currently impossible for proc {}, key {}", proc_id, key_id);
                                 Ok(RegistryResponse::Wait(key_id))
                             }
@@ -220,15 +265,26 @@ impl RegistryServer {
         }
     }
 
+    fn forward_request(&mut self, data: &[u8]) -> Result<(), RegistryServerError> {
+        // Forward socket to backup server
+        if let Some(backup_stream) = &mut self.backup_stream {
+            info!("Request is forwarded to secondary server {:?}", self.backup_addr);
+            backup_stream.write_all(&data)?;
+        }
+        Ok(())
+    }
+
     fn handle_request(
         &mut self,
         token: Token,
         data: &[u8],
     ) -> Result<(), RegistryServerError> {
+        self.forward_request(data)?;
+
         let message = Message::from_slice(data).inspect_err(|_| {
             error!("data: {:?}", std::str::from_utf8(data).unwrap());
         })?;
-        let response = self.handle_message(message, token.0)?;
+        let response = self.handle_message(message)?;
         self.handle_response(token, response)?;
 
         // check if we need to grant access to pending request
@@ -276,17 +332,6 @@ impl RegistryServer {
         let data = registry_response!(response).to_vec()?;
         stream.write_all(&data)?;
         Ok(())
-    }
-
-    pub fn new(port: u16) -> Result<Self, RegistryServerError> {
-        Ok(Self {
-            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port),
-            access_manager: AccessManager::new(),
-            token_stream_map: HashMap::new(),
-            token_addr_map: HashMap::new(),
-            id_counter: 0,
-            poll: Poll::new()?,
-        })
     }
 
     fn proc_id_to_addr(
