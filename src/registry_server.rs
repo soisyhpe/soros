@@ -50,6 +50,7 @@ pub struct RegistryServer {
     poll: Poll,
 
     id_counter: ProcId,
+    request_counter: u64
 }
 
 impl RegistryServer {
@@ -80,6 +81,7 @@ impl RegistryServer {
             poll: Poll::new()?,
 
             id_counter: 0,
+            request_counter: 0
         })
     }
 
@@ -141,10 +143,6 @@ impl RegistryServer {
         self.id_counter += 1;
         let token = Token(self.id_counter);
 
-        // Notify secondary server when new connection is established
-        let data = registry_connection_established!(self.id_counter).to_vec()?;
-        self.forward_request(&data)?;
-
         self.poll.registry().register(
             &mut stream,
             token,
@@ -157,6 +155,10 @@ impl RegistryServer {
 
         self.token_stream_map.insert(token, stream);
         self.token_addr_map.insert(token, addr);
+
+        // Notify secondary server when new connection is established
+        let data = registry_connection_established!(self.id_counter).to_vec()?;
+        self.forward_request(&data)?;
 
         Ok(())
     }
@@ -268,7 +270,7 @@ impl RegistryServer {
     fn forward_request(&mut self, data: &[u8]) -> Result<(), RegistryServerError> {
         // Forward socket to backup server
         if let Some(backup_stream) = &mut self.backup_stream {
-            info!("Request is forwarded to secondary server {:?}", self.backup_addr);
+            debug!("Request is forwarded to secondary server {:?}", self.backup_addr);
             backup_stream.write_all(&data)?;
         }
         Ok(())
@@ -279,8 +281,6 @@ impl RegistryServer {
         token: Token,
         data: &[u8],
     ) -> Result<(), RegistryServerError> {
-        self.forward_request(data)?;
-
         let message = Message::from_slice(data).inspect_err(|_| {
             error!("data: {:?}", std::str::from_utf8(data).unwrap());
         })?;
@@ -317,6 +317,20 @@ impl RegistryServer {
                 _ => {}
             };
         }
+
+        // Mirror server cannot manage reconstitution of pending requests
+        // Limitation: server crash occurs after managing all responses and forwarding requests.
+        self.forward_request(data)?;
+
+        // Only if we're the primary server
+        if self.backup_stream.is_some() && self.request_counter == 5 {
+            info!("Server has been shutting down!");
+            std::process::exit(0)
+        }
+
+        self.request_counter += 1;
+        debug!("self.request_counter = {}", self.request_counter);
+
 
         Ok(())
     }

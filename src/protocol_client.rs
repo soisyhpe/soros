@@ -58,7 +58,9 @@ impl ProtocolClient {
                 Ok(stream) => stream,
 
                 // If the primary server is down, switch to the secondary server
-                Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused
+                    || e.kind() == std::io::ErrorKind::ConnectionReset
+                    || e.kind() == std::io::ErrorKind::TimedOut => {
                     warn!("Failed to connect to primary server: {:?}", primary_server);
                     info!("Switching to secondary server: {:?}", secondary_server);
 
@@ -159,6 +161,7 @@ impl ProtocolClient {
     ) -> Result<(), ProtocolClientError> {
         info!("{} -> Registry create: {}", self.proc_id, key_id);
         self.registry_send_request(key_id, RequestType::Create)?;
+        info!("riwan");
         self.registry_expect_success(key_id)
     }
 
@@ -204,8 +207,8 @@ impl ProtocolClient {
         match ProtocolClient::receive_message(
             &mut self.registry_stream,
             &mut self.curr_data,
-        )? {
-            Message::Registry(RegistryMessage::Response(resp)) => match resp {
+        ) {
+            Ok(Message::Registry(RegistryMessage::Response(resp))) => match resp {
                 RegistryResponse::Error(err) => {
                     Err(ProtocolClientError::RegistryError(err))
                 }
@@ -213,6 +216,18 @@ impl ProtocolClient {
                     Err(ProtocolClientError::WaitError(key_id))
                 }
                 _ => Ok(resp),
+            },
+            Err(ProtocolClientError::IoError(err)) => {
+                match err.kind() {
+                    std::io::ErrorKind::ConnectionReset => {
+                        self.switch_to_secondary()?;
+                        self.registry_handle_response()
+                    },
+                    _ => {
+                        info!("error : {:?}", err.kind());
+                        Err(ProtocolClientError::UnexpectedResponse)
+                    }
+                }
             },
             _ => Err(ProtocolClientError::UnexpectedResponse),
         }
@@ -253,8 +268,26 @@ impl ProtocolClient {
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
         info!("{} -> Registry release: {}", self.proc_id, key_id);
-        self.registry_send_request(key_id, RequestType::Release)?;
-        self.registry_expect_success(key_id)
+        self.registry_send_request(key_id, RequestType::Release)?; // <----
+        self.registry_expect_success(key_id) // ?????
+    }
+
+    fn switch_to_secondary(&mut self) -> Result<(), ProtocolClientError> {
+        warn!("Primary server is not responding");
+        info!("Switching to secondary server: {:?}", self.secondary_server);
+
+        self.registry_stream =
+            TcpStream::connect(self.secondary_server)?;
+        let ok = ProtocolClient::registry_handle_connection(&mut self.registry_stream, &mut self.curr_data);
+
+        info!("ok {:?}", ok);
+
+        // 5 seconds timeout for the registry
+        let timeout = Duration::from_secs(5);
+        self.registry_stream.set_read_timeout(Some(timeout))?;
+        self.registry_stream.set_write_timeout(Some(timeout))?;
+
+        Ok(())
     }
 
     fn registry_send_request(
@@ -264,10 +297,14 @@ impl ProtocolClient {
     ) -> Result<(), ProtocolClientError> {
         let message = registry_request!(key_id, self.proc_id, request_type);
         let data = message.to_vec().map_err(ProtocolClientError::from)?;
+        // self.registry_stream.write_all(&data);
 
         // Try to send the message to the registry
         match self.registry_stream.write_all(&data) {
-            Ok(_) => Ok(()),
+            Ok(res) => {
+                info!("info {:?}", res);
+                Ok(())
+            },
             Err(e) => {
                 // If there is no backup server, return an error
                 if !self.is_primary {
@@ -275,18 +312,13 @@ impl ProtocolClient {
                 }
 
                 // If the primary server is down, switch to the secondary server
-                if e.kind() == std::io::ErrorKind::ConnectionRefused
+                if e.kind() == std::io::ErrorKind::ConnectionReset
+                    || e.kind() == std::io::ErrorKind::ConnectionRefused
                     || e.kind() == std::io::ErrorKind::TimedOut {
-                    warn!("Primary server is not responding");
-                    info!("Switching to secondary server: {:?}", self.secondary_server);
 
-                    self.registry_stream =
-                        TcpStream::connect(self.secondary_server)?;
+                    info!("salut salut");
 
-                    // 5 seconds timeout for the registry
-                    let timeout = Duration::from_secs(5);
-                    self.registry_stream.set_read_timeout(Some(timeout))?;
-                    self.registry_stream.set_write_timeout(Some(timeout))?;
+                    self.switch_to_secondary()?;
 
                     // Retry to send the message to the registry
                     info!("Forwarding previous request to secondary server");

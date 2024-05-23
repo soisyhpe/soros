@@ -1,24 +1,27 @@
-use std::net::{SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::{env, thread};
+use std::sync::Arc;
+use std::thread::sleep;
+use std::time::Duration;
 
 use env_logger::Env;
 use log::{error, info, warn};
 use soros::p2p_server::{
     DataStore, DataStoreError, P2PServer, P2PServerError,
 };
-use soros::{
-    handle_wait_error,
-    protocol_client::{ProtocolClient, ProtocolClientError},
-};
+use soros::{handle_wait_error, protocol_client::{ProtocolClient, ProtocolClientError}, registry_stop};
 use thiserror::Error;
+use soros::protocol::KeyId;
 
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum ClientError {
     #[error("ProtocolClient error: {0}")]
     ProtocolClientError(#[from] ProtocolClientError),
+
     #[error("P2PServer error: {0}")]
     P2PServerError(#[from] P2PServerError),
+
     #[error("DataStore error: {0}")]
     DataStoreError(#[from] DataStoreError),
 }
@@ -85,11 +88,10 @@ fn create_protocol_client() -> Result<ProtocolClient, ProtocolClientError> {
 //     // });
 //
 //     // TODO: let holder = client1.registry_read_sync(data_key)?;
-//     let holder =
-//         SocketAddr::new(IpAddr::V4("127.0.0.1".parse().unwrap()), 6001);
+//     let holder = SocketAddr::new(IpAddr::V4("127.0.0.1".parse().unwrap()), 6001);
 //     info!("Read of the data with key {}, holder: {}", data_key, holder);
 //
-//     P2PServer::get(holder.ip().to_string().as_str(), holder.port(), data_key)?;
+//     P2PServer::get(SocketAddr::V4(), data_key)?;
 //     // info!("Read data {}", data);
 //
 //     client1.registry_delete(data_key)?;
@@ -122,6 +124,21 @@ fn basic_usage() -> Result<(), ClientError> {
 
     protocol_client.registry_release(data_key)?;
     protocol_client.registry_delete(data_key)?;
+
+    // Now primary server should be down for demonstration purpose
+
+    info!("Now primary server should be down for demonstration purpose");
+    // thread::sleep(std::time::Duration::from_secs(1));
+
+    // Try to create new data
+    let data_key: KeyId = 2;
+    let mut _data = "second_data".to_string();
+    protocol_client.registry_create(2)?;
+    protocol_client.registry_write_sync(data_key)?;
+
+    info!("Write of the data with key {}", data_key);
+
+    protocol_client.registry_release(data_key)?;
 
     Ok(())
 }
