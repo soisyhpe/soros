@@ -1,17 +1,16 @@
 use std::net::{IpAddr, SocketAddr};
 use std::{env, thread};
-use std::sync::Arc;
-use std::thread::sleep;
-use std::time::Duration;
 
 use env_logger::Env;
 use log::{error, info, warn};
-use soros::p2p_server::{
-    DataStore, DataStoreError, P2PServer, P2PServerError,
-};
-use soros::{handle_wait_error, protocol_client::{ProtocolClient, ProtocolClientError}, registry_stop};
-use thiserror::Error;
+use soros::p2p_server::{DataStoreError, P2PServer, P2PServerError};
 use soros::protocol::KeyId;
+use soros::{
+    handle_wait_error,
+    protocol_client::{ProtocolClient, ProtocolClientError},
+    registry_stop,
+};
+use thiserror::Error;
 
 #[non_exhaustive]
 #[derive(Debug, Error)]
@@ -32,8 +31,11 @@ fn create_protocol_client() -> Result<ProtocolClient, ProtocolClientError> {
         panic!("Usage: {} <primary hostname:primary port> <secondary hostname:secondary port>", args[0]);
     }
 
-    let primary_server: SocketAddr = args[1].parse().expect("Invalid primary server information");
-    let secondary_server: SocketAddr = args[2].parse().expect("Invalid secondary server information");
+    let primary_server: SocketAddr =
+        args[1].parse().expect("Invalid primary server information");
+    let secondary_server: SocketAddr = args[2]
+        .parse()
+        .expect("Invalid secondary server information");
 
     ProtocolClient::new(primary_server, secondary_server)
 }
@@ -174,7 +176,8 @@ fn main() -> Result<(), ClientError> {
         .init();
 
     let handles = vec![
-        /*thread::spawn(p2p)*/ thread::spawn(basic_usage)/*, thread::spawn(advanced_usage)*/,
+        /*thread::spawn(p2p)*/
+        thread::spawn(basic_usage), /*, thread::spawn(advanced_usage)*/
     ];
 
     for handle in handles {

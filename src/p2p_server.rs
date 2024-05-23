@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 
-use std::sync::{Arc, Mutex};
-use std::{io, net::ToSocketAddrs};
+use std::io;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
 use crate::protocol::{DataMessage, KeyId, Message};
 
@@ -109,13 +109,13 @@ pub struct P2PServer {
 }
 
 impl P2PServer {
-
-    pub fn get(peer_addr: SocketAddr, key_id: KeyId,
+    pub fn get(
+        peer_addr: SocketAddr,
+        key_id: KeyId,
     ) -> Result<(), P2PServerError> {
         info!("Getting data from {:?}", peer_addr);
 
-        let mut stream =
-            std::net::TcpStream::connect(peer_addr)?;
+        let mut stream = std::net::TcpStream::connect(peer_addr)?;
         let message = Message::Data(DataMessage::Request { key_id });
         let data = message.to_vec()?;
         stream.write_all(&data)?;
@@ -131,11 +131,15 @@ impl P2PServer {
                 Ok(())
             }
             _ => Err(P2PServerError::UnexpectedResponse),
-        }.expect("Unable to retrieve received data");
+        }
+        .expect("Unable to retrieve received data");
         Ok(())
     }
 
-    pub fn new(data_store: Arc<DataStore>, peer_addr: SocketAddr, ) -> Result<Self, P2PServerError> {
+    pub fn new(
+        data_store: Arc<DataStore>,
+        peer_addr: SocketAddr,
+    ) -> Result<Self, P2PServerError> {
         info!("Trying to create new p2p server {:?}", peer_addr);
 
         Ok(Self {
