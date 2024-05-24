@@ -100,63 +100,41 @@ pub enum P2PServerError {
     UnexpectedRequest,
     #[error("Unexpected response")]
     UnexpectedResponse,
+    #[error("Invalid {:?}", .0)]
+    InvalidToken(Token),
 }
 
 #[derive(Debug)]
 pub struct P2PServer {
     pub peer_addr: SocketAddr,
     pub data_store: Arc<DataStore>,
+    token_stream_map: HashMap<Token, TcpStream>,
+    poll: Poll,
+    token_counter: usize,
 }
 
 impl P2PServer {
-
-    pub fn retrieve(
-        peer_addr: SocketAddr,
-        key_id: KeyId,
-    ) -> Result<(), P2PServerError> {
-        info!("Getting data from {:?}", peer_addr);
-
-        let mut stream = std::net::TcpStream::connect(peer_addr)?;
-        let message = Message::Data(DataMessage::Request { key_id });
-        let data = message.to_vec()?;
-        stream.write_all(&data)?;
-
-        let mut buffer = [0; 128];
-        let read = stream.read(&mut buffer)?;
-
-        let message = Message::from_slice(&buffer[..read])?;
-        info!("Data received: {:?}", message);
-        match message {
-            Message::Data(DataMessage::Response { data }) => {
-                info!("Data received: {}", data);
-                Ok(())
-            }
-            _ => Err(P2PServerError::UnexpectedResponse),
-        }?;
-        Ok(())
-    }
-
     pub fn new(
         data_store: Arc<DataStore>,
         peer_addr: SocketAddr,
     ) -> Result<Self, P2PServerError> {
-        info!("Trying to create new p2p server {:?}", peer_addr);
-
         Ok(Self {
             peer_addr,
             data_store,
+            token_stream_map: HashMap::new(),
+            poll: Poll::new()?,
+            token_counter: 0,
         })
     }
 
     pub fn bind(&mut self) -> Result<(), P2PServerError> {
-        info!("Starting p2p server in background on {:?}", self.peer_addr);
+        info!("starting p2p server in background on {:?}", self.peer_addr);
 
         let mut listener = TcpListener::bind(self.peer_addr)?;
         let mut events = Events::with_capacity(128);
-        let mut poll = Poll::new()?;
 
         const LISTENER: Token = Token(0);
-        poll.registry().register(
+        self.poll.registry().register(
             &mut listener,
             LISTENER,
             Interest::READABLE,
@@ -164,37 +142,68 @@ impl P2PServer {
 
         loop {
             // Attente d'un événement
-            poll.poll(&mut events, None).expect("Error while polling");
+            self.poll
+                .poll(&mut events, None)
+                .expect("Error while polling");
 
             // Traitement des événements
             for event in events.iter() {
                 // Si l'événement est lié au listener
                 match event.token() {
-                    LISTENER => loop {
-                        // Accepte une nouvelle connexion
-                        match listener.accept() {
-                            // Si la connexion est acceptée
-                            Ok((stream, _addr)) => {
-                                self.handle_connection(stream)
-                                    .expect("Error while handling connection");
-                            }
+                    LISTENER => {
+                        loop {
+                            // Accepte une nouvelle connexion
+                            match listener.accept() {
+                                // Si la connexion est acceptée
+                                Ok((stream, _addr)) => {
+                                    self.handle_connection(stream)?
+                                }
 
-                            // Si la connexion n'est pas acceptée
-                            Err(ref e)
-                                if e.kind() == io::ErrorKind::WouldBlock =>
-                            {
-                                break;
-                            }
+                                // Si la connexion n'est pas acceptée
+                                Err(ref e)
+                                    if e.kind()
+                                        == io::ErrorKind::WouldBlock =>
+                                {
+                                    break;
+                                }
 
-                            // Si une erreur survient
-                            Err(e) => panic!("Unexpected error: {}", e),
+                                // Si une erreur survient
+                                Err(e) => panic!("Unexpected error: {}", e),
+                            }
                         }
-                    },
-
-                    // Si l'événement n'est pas lié au listener, on ne fait rien
-                    _ => {}
+                    }
+                    token if event.is_readable() => {
+                        let res = self.handle_data(token);
+                        if let Err(err) = res {
+                            error!(
+                                "Failed to handle data for token: {}, got: {}",
+                                token.0, err
+                            )
+                        }
+                    }
+                    _ => (),
                 }
             }
+        }
+    }
+
+    fn handle_data(&mut self, token: Token) -> Result<(), P2PServerError> {
+        let stream = self.token_stream_map.get_mut(&token).unwrap();
+        let mut buffer = [0; 256];
+        let read = stream.read(&mut buffer);
+
+        match read {
+            Ok(0) => {
+                self.token_stream_map.remove(&token);
+                Ok(())
+            }
+            Err(e) if e.kind() == io::ErrorKind::ConnectionReset => {
+                self.token_stream_map.remove(&token);
+                Err(P2PServerError::IoError(e))
+            }
+            Ok(size) => self.handle_request(token, &buffer[..size]),
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            Err(e) => Err(P2PServerError::IoError(e)),
         }
     }
 
@@ -202,23 +211,17 @@ impl P2PServer {
         &mut self,
         mut stream: TcpStream,
     ) -> Result<(), P2PServerError> {
-        info!("Handling connection from {:?}", stream.peer_addr());
+        self.token_counter += 1;
+        let token = Token(self.token_counter);
 
-        let mut buffer = [0; 256];
-        let read = stream.read(&mut buffer);
+        self.poll.registry().register(
+            &mut stream,
+            token,
+            Interest::READABLE,
+        )?;
 
-        match read {
-            Ok(0) => Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::ConnectionReset => {
-                Err(P2PServerError::IoError(e))
-            }
-            Ok(size) => {
-                let _res = self.handle_request(&buffer[..size]);
-                Ok(())
-            }
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(()),
-            Err(e) => Err(P2PServerError::IoError(e)),
-        }?;
+        info!("handling connection from {:?}", stream.peer_addr());
+        self.token_stream_map.insert(token, stream);
 
         Ok(())
     }
@@ -237,11 +240,22 @@ impl P2PServer {
         }
     }
 
-    fn handle_request(&mut self, data: &[u8]) -> Result<(), P2PServerError> {
+    fn handle_request(
+        &mut self,
+        token: Token,
+        data: &[u8],
+    ) -> Result<(), P2PServerError> {
         let message = Message::from_slice(data).inspect_err(|_| {
             error!("data: {:?}", std::str::from_utf8(data).unwrap());
         })?;
-        let _response = self.handle_message(message)?;
+
+        let response = self.handle_message(message)?;
+        let Some(stream) = self.token_stream_map.get_mut(&token) else {
+            return Err(P2PServerError::InvalidToken(token));
+        };
+
+        let data = Message::Data(response).to_vec()?;
+        stream.write_all(&data)?;
 
         Ok(())
     }

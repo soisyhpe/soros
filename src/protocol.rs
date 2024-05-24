@@ -59,7 +59,7 @@ pub enum RegistryMessage {
     Request {
         proc_id: ProcId,
         request_type: RequestType,
-        key_id: KeyId
+        key_id: KeyId,
     },
     /// Response containing registry data.
     Response(RegistryResponse),
@@ -82,7 +82,7 @@ macro_rules! registry_request {
         Message::Registry(RegistryMessage::Request {
             key_id: $key_id,
             proc_id: $proc_id,
-            request_type: $request_type
+            request_type: $request_type,
         })
     };
 }

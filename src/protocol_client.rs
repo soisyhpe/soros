@@ -6,6 +6,7 @@ use std::{
 };
 use thiserror::Error;
 
+use crate::protocol::DataMessage;
 use crate::{
     protocol::{
         KeyId, Message, ProcId, RegistryMessage, RegistryResponse, RequestType,
@@ -38,6 +39,7 @@ pub enum ProtocolClientError {
 #[derive(Debug)]
 pub struct ProtocolClient {
     is_primary: bool,
+    pub logging: bool,
 
     pub primary_server: SocketAddr,
     pub secondary_server: SocketAddr,
@@ -52,10 +54,7 @@ impl ProtocolClient {
         primary_server: SocketAddr,
         secondary_server: SocketAddr,
     ) -> Result<Self, ProtocolClientError> {
-        info!(
-            "Trying to connect to the primary registry: {:?}",
-            primary_server
-        );
+        info!("connect to primary registry: {:?}", primary_server);
 
         let mut is_primary = true;
         let mut registry_stream = match TcpStream::connect(primary_server) {
@@ -68,11 +67,8 @@ impl ProtocolClient {
                     || e.kind() == std::io::ErrorKind::ConnectionReset
                     || e.kind() == std::io::ErrorKind::TimedOut =>
             {
-                warn!(
-                    "Failed to connect to primary server: {:?}",
-                    primary_server
-                );
-                info!("Switching to secondary server: {:?}", secondary_server);
+                warn!("failed to reach primary registry: {:?}", primary_server);
+                info!("switch to secondary registry: {:?}", secondary_server);
 
                 is_primary = false;
                 TcpStream::connect(secondary_server)?
@@ -96,6 +92,7 @@ impl ProtocolClient {
 
         Ok(Self {
             is_primary,
+            logging: true,
 
             primary_server,
             secondary_server,
@@ -112,7 +109,7 @@ impl ProtocolClient {
     ) -> Result<Message, ProtocolClientError> {
         loop {
             // While testing in local, the stream reading sometimes block.
-            // Lowering the buffer size seems to  fix the issue...
+            // Lowering the buffer size seems to fix the issue...
             let mut buffer = [0; 32];
             let len = stream.read(&mut buffer)?;
             curr_data.extend_from_slice(&buffer[..len]);
@@ -169,7 +166,9 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
-        info!("{} -> Registry create: {}", self.proc_id, key_id);
+        if self.logging {
+            info!("{} -> Registry create: {}", self.proc_id, key_id);
+        }
         self.registry_send_request(key_id, RequestType::Create)?;
         self.registry_expect_success(key_id)
     }
@@ -179,7 +178,9 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
-        info!("{} -> Registry delete: {}", self.proc_id, key_id);
+        if self.logging {
+            info!("{} -> Registry delete: {}", self.proc_id, key_id);
+        }
         self.registry_send_request(key_id, RequestType::Delete)?;
         self.registry_expect_success(key_id)
     }
@@ -228,16 +229,6 @@ impl ProtocolClient {
                     _ => Ok(resp),
                 }
             }
-            Err(ProtocolClientError::IoError(err)) => match err.kind() {
-                std::io::ErrorKind::ConnectionReset => {
-                    self.switch_to_secondary()?;
-                    self.registry_handle_response()
-                }
-                _ => {
-                    info!("error : {:?}", err.kind());
-                    Err(ProtocolClientError::UnexpectedResponse)
-                }
-            },
             _ => Err(ProtocolClientError::UnexpectedResponse),
         }
     }
@@ -247,7 +238,9 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
-        info!("{} -> Registry read: {:?}", self.proc_id, key_id);
+        if self.logging {
+            info!("{} -> Registry read: {:?}", self.proc_id, key_id);
+        }
         self.registry_send_request(key_id, RequestType::Read)
     }
 
@@ -259,7 +252,7 @@ impl ProtocolClient {
         self.registry_read(key_id)?;
         match self.registry_await_read() {
             Err(ProtocolClientError::WaitError(key_id)) => {
-                warn!("Awaiting read of {}...", key_id);
+                warn!("awaiting read of {}...", key_id);
                 let res = self.registry_await_read()?;
                 if key_id != res.0 {
                     return Err(ProtocolClientError::UnexpectedResponse);
@@ -276,23 +269,32 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
-        info!("{} -> Registry release: {}", self.proc_id, key_id);
-        self.registry_send_request(key_id, RequestType::Release)?; // <----
-        self.registry_expect_success(key_id) // ?????
+        if self.logging {
+            info!("{} -> Registry release: {}", self.proc_id, key_id);
+        }
+        self.registry_send_request(key_id, RequestType::Release)?;
+        self.registry_expect_success(key_id)
     }
 
     fn switch_to_secondary(&mut self) -> Result<(), ProtocolClientError> {
-        warn!("Primary server is not responding");
-        info!("Switching to secondary server: {:?}", self.secondary_server);
+        warn!("{} -> primary server not responding", self.proc_id);
+        info!(
+            "{} -> switch to secondary registry: {:?}",
+            self.proc_id, self.secondary_server
+        );
 
         self.registry_stream = TcpStream::connect(self.secondary_server)?;
-        let ok = ProtocolClient::registry_handle_connection(
+        let proc_id = ProtocolClient::registry_handle_connection(
             &mut self.registry_stream,
             &mut self.curr_data,
         );
+        info!(
+            "{} -> handle connection request and got id {:?}",
+            self.proc_id, proc_id
+        );
 
         // 5 seconds timeout for the registry
-        let timeout = Duration::from_secs(1);
+        let timeout = Duration::from_secs(5);
         self.registry_stream.set_read_timeout(Some(timeout))?;
         self.registry_stream.set_write_timeout(Some(timeout))?;
 
@@ -308,41 +310,50 @@ impl ProtocolClient {
         let data = message.to_vec().map_err(ProtocolClientError::from)?;
 
         // Try to send the message to the registry
-        self.registry_stream.write_all(&data)?;
+        let write_res = self.registry_stream.write_all(&data);
+        if write_res.is_err() {
+            // If there is no backup server, return an error
+            if !self.is_primary {
+                return Err(ProtocolClientError::NoBackupServer());
+            }
+
+            // If the primary server is down, switch to the secondary server
+            self.switch_to_secondary()?;
+
+            // Retry to send the message to the registry
+            info!("forward request to secondary registry");
+            self.registry_stream.write_all(&data)?;
+
+            return Ok(());
+        }
 
         // Check if connection is still active
         let mut buf = [0; 1];
         match self.registry_stream.peek(&mut buf) {
             Ok(_) => Ok(()),
-            Err(e) => {
+            Err(_e) => {
                 // If there is no backup server, return an error
                 if !self.is_primary {
                     return Err(ProtocolClientError::NoBackupServer());
                 }
 
                 // If the primary server is down, switch to the secondary server
-                if e.kind() == std::io::ErrorKind::ConnectionReset
-                    || e.kind() == std::io::ErrorKind::ConnectionRefused
-                    || e.kind() == std::io::ErrorKind::TimedOut
-                {
-                    self.switch_to_secondary()?;
+                self.switch_to_secondary()?;
 
-                    // Retry to send the message to the registry
-                    info!("Forwarding previous request to secondary server");
-                    self.registry_stream.write_all(&data)?;
+                // Retry to send the message to the registry
+                info!("forward request to secondary registry");
+                self.registry_stream.write_all(&data)?;
 
-                    Ok(())
-                } else {
-                    // If the error is not a connection refused, return the error
-                    Err(ProtocolClientError::from(e))
-                }
+                Ok(())
             }
         }
     }
 
     /// Send a stop request to the registry, for testing purpose.
     pub fn registry_stop(&mut self) -> Result<(), ProtocolClientError> {
-        info!("{} -> Registry stop", self.proc_id);
+        if self.logging {
+            info!("{} -> Registry stop", self.proc_id);
+        }
         let message = registry_stop!();
         let data = message.to_vec().map_err(ProtocolClientError::from)?;
         self.registry_stream.write_all(&data)?;
@@ -354,7 +365,9 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
-        info!("{} -> Registry write: {}", self.proc_id, key_id);
+        if self.logging {
+            info!("{} -> Registry write: {}", self.proc_id, key_id);
+        }
         self.registry_send_request(key_id, RequestType::Write)
     }
 
@@ -363,7 +376,9 @@ impl ProtocolClient {
         &mut self,
         key_id: KeyId,
     ) -> Result<(), ProtocolClientError> {
-        info!("{} -> Registry write sync: {}", self.proc_id, key_id);
+        if self.logging {
+            info!("{} -> Registry write sync: {}", self.proc_id, key_id);
+        }
         self.registry_write(key_id)?;
         match self.registry_await_write() {
             Err(ProtocolClientError::WaitError(key_id)) => {
@@ -377,6 +392,37 @@ impl ProtocolClient {
             res => res,
         }
         .map(|_| ())
+    }
+
+    pub fn p2p_read(
+        &mut self,
+        key_id: KeyId,
+        peer_addr: SocketAddr,
+    ) -> Result<String, ProtocolClientError> {
+        if self.logging {
+            info!(
+                "{} -> P2p read {} from {:?}",
+                self.proc_id, key_id, peer_addr
+            );
+        }
+
+        let mut stream = TcpStream::connect(peer_addr)?;
+        let message = Message::Data(DataMessage::Request { key_id });
+        stream.write_all(&message.to_vec()?)?;
+
+        let mut buffer = [0; 256];
+        let readen = stream.read(&mut buffer)?;
+        let data = &buffer[..readen].to_vec();
+        debug!(
+            "Parsed data: {:?}",
+            std::str::from_utf8(data.as_slice()).unwrap()
+        );
+
+        let message = Message::from_slice(data)?;
+        match message {
+            Message::Data(DataMessage::Response { data }) => Ok(data),
+            _ => Err(ProtocolClientError::UnexpectedResponse),
+        }
     }
 }
 
