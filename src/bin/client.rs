@@ -1,9 +1,10 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::{env, thread};
+use std::sync::Arc;
 
 use env_logger::Env;
 use log::{error, info, warn};
-use soros::p2p_server::{DataStoreError, P2PServer, P2PServerError};
+use soros::p2p_server::{DataStore, DataStoreError, P2PServer, P2PServerError};
 use soros::protocol::KeyId;
 use soros::{
     handle_wait_error,
@@ -40,110 +41,115 @@ fn create_protocol_client() -> Result<ProtocolClient, ProtocolClientError> {
     ProtocolClient::new(primary_server, secondary_server)
 }
 
-// fn p2p() -> Result<(), ClientError> {
-//     // client1
-//     let mut client1 = create_protocol_client()?;
-//     let client1_datastore = Arc::new(DataStore::new());
-//     let data_store1 = client1_datastore.clone();
-//
-//     let handle1 = thread::spawn(|| -> Result<(), P2PServerError> {
-//         let mut client1_p2p = P2PServer::new(data_store1, "127.0.0.1", 6001)?;
-//         client1_p2p.bind()?;
-//         Ok(())
-//     });
-//
-//     sleep(Duration::from_secs(1));
-//
-//     let data_key = 1;
-//     client1_datastore.clone().create(data_key, "my_data")?;
-//     info!(
-//         "Data with key {} created with content {}",
-//         data_key,
-//         client1_datastore.get(&data_key)?
-//     );
-//
-//     client1.registry_create(data_key)?;
-//     let _ = client1.registry_create(data_key);
-//     client1.registry_write_sync(data_key)?;
-//     info!("Write of the data with key {}", data_key);
-//
-//     client1_datastore
-//         .clone()
-//         .write(&data_key, "modified_data")?;
-//     info!(
-//         "Data with key {} modified with content {}",
-//         data_key,
-//         client1_datastore.get(&data_key)?
-//     );
-//
-//     client1.registry_release(data_key)?;
-//
-//     // client2
-//     let mut _client2 = create_protocol_client()?;
-//     // let client2_datastore = Arc::new(DataStore::new());
-//     // let data_store2 = client2_datastore.clone();
-//
-//     // let handle2 = thread::spawn(|| -> Result<(), P2PServerError> {
-//     //     let mut client2_p2p = P2PServer::new(data_store2, "localhost", 6001)?;
-//     //     client2_p2p.bind()?;
-//     //     Ok(())
-//     // });
-//
-//     // TODO: let holder = client1.registry_read_sync(data_key)?;
-//     let holder = SocketAddr::new(IpAddr::V4("127.0.0.1".parse().unwrap()), 6001);
-//     info!("Read of the data with key {}, holder: {}", data_key, holder);
-//
-//     P2PServer::get(SocketAddr::V4(), data_key)?;
-//     // info!("Read data {}", data);
-//
-//     client1.registry_delete(data_key)?;
-//
-//     let _ = handle1.join().unwrap();
-//     // let _ = handle2.join();
-//
-//     Ok(())
-// }
+fn p2p() -> Result<(), ClientError> {
+    // client1
+    let mut client1 = create_protocol_client()?;
+    let client1_datastore = Arc::new(DataStore::new());
+    let data_store1 = client1_datastore.clone();
 
-fn basic_usage() -> Result<(), ClientError> {
-    let mut protocol_client = create_protocol_client()?;
+    let handle1 = thread::spawn(|| -> Result<(), P2PServerError> {
+        let mut client1_p2p = P2PServer::new(data_store1, SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 6001))?;
+        client1_p2p.bind()?;
+        Ok(())
+    });
 
-    let data_key = 1;
-    let mut _data = "my_data".to_string();
+    thread::sleep(std::time::Duration::from_secs(1));
 
-    protocol_client.registry_create(data_key)?;
-    let _ = protocol_client.registry_create(data_key);
-    protocol_client.registry_write_sync(data_key)?;
+    let data_key: KeyId = 1;
+
+    client1.registry_create(data_key)?;
+    let _ = client1.registry_create(data_key);
+    client1.registry_write_sync(data_key)?;
+
+    info!("Write for key {} granted", data_key);
+
+    client1_datastore.create(data_key, "my_data")?;
+    info!("Data with key {} created with content \"{:?}\"", data_key, client1_datastore.get(&data_key));
 
     info!("Write of the data with key {}", data_key);
-    _data = "modified_data".to_string();
 
-    protocol_client.registry_release(data_key)?;
+    // client1_datastore
+    //     .clone()
+    //     .write(&data_key, "modified_data")?;
+    // info!(
+    //     "Data with key {} modified with content {}",
+    //     data_key,
+    //     client1_datastore.get(&data_key)?
+    // );
 
-    let holder = protocol_client.registry_read_sync(data_key)?;
+    client1.registry_release(data_key)?;
 
-    // TODO: missing peer to peer implementation to get the data content
+    // client2
+    let mut client2 = create_protocol_client()?;
+    let client2_datastore = Arc::new(DataStore::new());
+    let data_store2 = client2_datastore.clone();
+
+    let handle2 = thread::spawn(|| -> Result<(), P2PServerError> {
+        let mut client2_p2p = P2PServer::new(data_store2, SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 6002))?;
+        client2_p2p.bind()?;
+        Ok(())
+    });
+
+    let key_to_read: KeyId = 1;
+    let _ = client2.registry_read_sync(key_to_read)?;
+
+    info!("Read for key {} granted", key_to_read);
+
+    client2.registry_release(key_to_read)?;
+
+    let holder = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 6001);;
     info!("Read of the data with key {}, holder: {}", data_key, holder);
 
-    protocol_client.registry_release(data_key)?;
-    protocol_client.registry_delete(data_key)?;
+    P2PServer::retrieve(holder, data_key)?;
+    // info!("Read data {}", data);
 
-    // Now primary server should be down for demonstration purpose
+    client2.registry_delete(data_key)?;
 
-    info!("Now primary server should be down for demonstration purpose");
-    // thread::sleep(std::time::Duration::from_secs(1));
-
-    // Try to create new data
-    let data_key: KeyId = 2;
-    let mut _data = "second_data".to_string();
-    protocol_client.registry_create(2)?;
-    protocol_client.registry_write_sync(data_key)?;
-
-    info!("Write of the data with key {}", data_key);
-
-    protocol_client.registry_release(data_key)?;
+    let _ = handle1.join();
+    let _ = handle2.join();
 
     Ok(())
 }
+
+// fn basic_usage() -> Result<(), ClientError> {
+//     let mut protocol_client = create_protocol_client()?;
+//
+//     let data_key = 1;
+//     let mut _data = "my_data".to_string();
+//
+//     protocol_client.registry_create(data_key)?;
+//     let _ = protocol_client.registry_create(data_key);
+//     protocol_client.registry_write_sync(data_key)?;
+//
+//     info!("Write of the data with key {}", data_key);
+//     _data = "modified_data".to_string();
+//
+//     protocol_client.registry_release(data_key)?;
+//
+//     let holder = protocol_client.registry_read_sync(data_key)?;
+//
+//     // TODO: missing peer to peer implementation to get the data content
+//     info!("Read of the data with key {}, holder: {}", data_key, holder);
+//
+//     protocol_client.registry_release(data_key)?;
+//     protocol_client.registry_delete(data_key)?;
+//
+//     // Now primary server should be down for demonstration purpose
+//
+//     info!("Now primary server should be down !");
+//
+//     // Try to create new data
+//     let data_key: KeyId = 2;
+//     let mut _data = "second_data".to_string();
+//     protocol_client.registry_create(2)?;
+//     protocol_client.registry_write_sync(data_key)?;
+//
+//     info!("Write of the data with key {}", data_key);
+//
+//     protocol_client.registry_release(data_key)?;
+//
+//     Ok(())
+// }
 
 fn advanced_usage() -> Result<(), ClientError> {
     let mut protocol_client = create_protocol_client()?;
@@ -176,8 +182,9 @@ fn main() -> Result<(), ClientError> {
         .init();
 
     let handles = vec![
-        /*thread::spawn(p2p)*/
-        thread::spawn(basic_usage), /*, thread::spawn(advanced_usage)*/
+        thread::spawn(p2p),
+        // thread::spawn(basic_usage),
+        /* thread::spawn(advanced_usage) */
     ];
 
     for handle in handles {

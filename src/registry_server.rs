@@ -331,7 +331,6 @@ impl RegistryServer {
         self.request_counter += 1;
         debug!("self.request_counter = {}", self.request_counter);
 
-
         Ok(())
     }
 

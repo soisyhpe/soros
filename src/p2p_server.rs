@@ -109,7 +109,8 @@ pub struct P2PServer {
 }
 
 impl P2PServer {
-    pub fn get(
+
+    pub fn retrieve(
         peer_addr: SocketAddr,
         key_id: KeyId,
     ) -> Result<(), P2PServerError> {
@@ -120,7 +121,7 @@ impl P2PServer {
         let data = message.to_vec()?;
         stream.write_all(&data)?;
 
-        let mut buffer = [0; 256];
+        let mut buffer = [0; 128];
         let read = stream.read(&mut buffer)?;
 
         let message = Message::from_slice(&buffer[..read])?;
@@ -131,8 +132,7 @@ impl P2PServer {
                 Ok(())
             }
             _ => Err(P2PServerError::UnexpectedResponse),
-        }
-        .expect("Unable to retrieve received data");
+        }?;
         Ok(())
     }
 
